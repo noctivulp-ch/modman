@@ -222,6 +222,22 @@ modman patched tide ./build/tide-2.1.1-cnny.jar --note "sin EntityRenderDispatch
 A partir de ahí ese jar gana al original en cada despliegue, y se guarda su hash: si falta o
 cambia, el despliegue **se niega** en vez de poner el original y deshacer el parche en silencio.
 
+## La skill
+
+La metodología de gestión —updates, integrar mods nuevos, rescatar los problemáticos, campañas de
+activación por olas— está en [`skills/mod-ops/SKILL.md`](skills/mod-ops/SKILL.md), **en este repo**
+y no en una copia dentro de `~/.claude`:
+
+```bash
+./skills/install.sh            # enlaza en ~/.claude; el repo queda como fuente de verdad
+./skills/install.sh --status
+```
+
+Con enlace y no copia porque ya pasó lo contrario: esa skill llegó a describir un modman de dos
+generaciones atrás, porque la copia del sistema y la herramienta evolucionaron por separado. Y por
+eso la skill tampoco lleva la lista de comandos escrita dentro: remite a `modman --json help`, que
+se genera de la especificación real.
+
 ## Estado
 
 Núcleo, CLI y TUI funcionando, con los 19 comandos del original. Verificado contra un pack real de
