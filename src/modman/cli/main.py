@@ -409,6 +409,43 @@ def cmd_targets(a, out: Out) -> int:
     return 0
 
 
+def cmd_catalog(a, out: Out) -> int:
+    m = _open(a)
+    documentos, recogidas = m.catalog(write=not a.dry)
+    for slug, marca in sorted(recogidas.items()):
+        out.line(f"  marcado en el documento → índice: {slug} {marca}")
+    for ruta, contenido in documentos.items():
+        lineas = contenido.count("\n")
+        estado = "se escribiría" if a.dry else "escrito"
+        out.line(f"  {estado}: {ruta}  ({lineas} líneas)")
+    if a.dry:
+        out.note("(simulado) nada se ha escrito")
+    return 0
+
+
+def cmd_apply_picks(a, out: Out) -> int:
+    m = _open(a)
+    mensajes = m.apply_picks()
+    if not mensajes:
+        out.note("nada que aplicar: no hay marcas nuevas en el índice")
+        return 0
+    for linea in mensajes:
+        (out.warn if linea.startswith("!") else out.line)(linea.lstrip("! "))
+    out.line()
+    out.note(f"{len(mensajes)} cambios de estado · ahora `modman deploy`")
+    return 0
+
+
+def cmd_patched(a, out: Out) -> int:
+    m = _open(a)
+    mod = m.register_patched(a.slug, Path(a.jar), note=a.note or "", enable=a.on)
+    out.ok(f"{mod.slug}: se desplegará {mod.patched} en vez de {mod.filename}")
+    if mod.note:
+        out.note(f"nota: {mod.note}")
+    out.note("el hash queda guardado: si el jar falta o cambia, el despliegue se negará")
+    return 0
+
+
 def cmd_help(a, out: Out) -> int:
     """Referencia completa, o el detalle de un comando.
 
@@ -501,6 +538,9 @@ def build_parser() -> argparse.ArgumentParser:
         "update": cmd_update,
         "rollback": cmd_rollback,
         "ledger": cmd_ledger,
+        "catalog": cmd_catalog,
+        "apply-picks": cmd_apply_picks,
+        "patched": cmd_patched,
         "help": cmd_help,
     }
 

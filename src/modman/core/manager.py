@@ -22,6 +22,7 @@ from .graph import Graph, LibraryDecision, Problem
 from .index import Index, dumps, to_raw
 from .ledger import Ledger
 from .model import Mod, Plan, Side, State
+from .reports import CatalogReporter, load_descriptions, read_checkboxes
 from .sources.base import Registry, RemoteVersion, Source, SourceError
 from .sources.modrinth import ModrinthSource, pick_file
 
@@ -355,6 +356,138 @@ class Modman:
                 mod.side, mod.state, mod.note = d.side, d.state, d.note
                 self.index.save(mod)
         return decisiones
+
+    # ------------------------------------------------------------ documentos --
+    def catalog(
+        self, *, write: bool = True, collect: bool | None = None
+    ) -> tuple[dict[Path, str], dict[str, str]]:
+        """Genera los documentos y, antes, recoge las casillas marcadas en ellos.
+
+        El orden importa: si se regenerase primero, se borrarían las marcas que alguien acaba de
+        poner. Devuelve `(documentos, marcas recogidas)`.
+
+        `collect` sigue a `write` salvo que se diga otra cosa, y esa es la parte que no es obvia:
+        un `--dry` que recogiera las casillas escribiría en el índice, que es justo lo que promete
+        no hacer. Con `write=False` no se toca absolutamente nada.
+        """
+        if collect is None:
+            collect = write
+        if not self.cfg.docs_dir:
+            raise ManagerError(
+                "no hay dónde escribir los documentos. Añade a tu modman.toml:\n\n  [docs]\n  dir = \"docs\""
+            )
+        recogidas = self._collect_checkboxes() if collect else self._preview_checkboxes()
+        contexto = {
+            "docs_dir": self.cfg.docs_dir,
+            "descriptions": load_descriptions(self.cfg.descriptions_file),
+            "texts": self.cfg.doc_texts,
+        }
+        reporter = self.ext.reporters.get("catalog") or CatalogReporter()
+        documentos = reporter.report(self.index.all().values(), contexto)
+        if write:
+            self.cfg.docs_dir.mkdir(parents=True, exist_ok=True)
+            for ruta, contenido in documentos.items():
+                ruta.write_text(contenido, encoding="utf-8")
+        return documentos, recogidas
+
+    def _collect_checkboxes(self) -> dict[str, str]:
+        """Lee las casillas de los documentos existentes y las guarda en el índice."""
+        if not self.cfg.docs_dir:
+            return {}
+        fuentes = (
+            ("mods-duplicados.md", "pick", {"prefiero": "prefer", "descarte": "discard"}),
+            ("mods-incompatibles.md", "priority", {"alta": "alta", "media": "media", "baja": "baja"}),
+        )
+        recogidas: dict[str, str] = {}
+        for archivo, campo, opciones in fuentes:
+            marcas = read_checkboxes(self.cfg.docs_dir / archivo, opciones)
+            for slug, valor in marcas.items():
+                if slug not in self.index:
+                    continue
+                mod = self.index.get(slug)
+                if mod.raw.get(campo, "") != valor:
+                    mod.raw[campo] = valor
+                    self.index.save(mod)
+                    recogidas[slug] = f"{campo}={valor}"
+        return recogidas
+
+    def _preview_checkboxes(self) -> dict[str, str]:
+        """Las marcas que se recogerían, sin guardarlas. Para `--dry`."""
+        if not self.cfg.docs_dir:
+            return {}
+        salida: dict[str, str] = {}
+        for archivo, campo, opciones in (
+            ("mods-duplicados.md", "pick", {"prefiero": "prefer", "descarte": "discard"}),
+            ("mods-incompatibles.md", "priority", {"alta": "alta", "media": "media", "baja": "baja"}),
+        ):
+            for slug, valor in read_checkboxes(self.cfg.docs_dir / archivo, opciones).items():
+                if slug in self.index and self.index.get(slug).raw.get(campo, "") != valor:
+                    salida[slug] = f"{campo}={valor}"
+        return salida
+
+    def apply_picks(self) -> list[str]:
+        """Aplica las marcas de duplicados: `prefer` → on, `discard` → off.
+
+        Con dos guardas que vienen de haberse quemado: un mod marcado como roto no se enciende
+        aunque lo prefieran, y tampoco uno que dependa de una librería rota. Encenderlo solo
+        conseguiría que el servidor no arrancara y que costara ver por qué.
+        """
+        mensajes: list[str] = []
+        proveedores = self.graph().providers
+        for slug, mod in sorted(self.index.all().items()):
+            eleccion = mod.raw.get("pick", "")
+            if mod.raw.get("broken") and mod.state is State.ON:
+                self.edit(slug, state=State.OFF)
+                mensajes.append(f"off {slug}: está marcado como roto, no puede quedar activo")
+                continue
+            if eleccion == "prefer" and mod.state is not State.ON:
+                if mod.raw.get("broken"):
+                    mensajes.append(f"! {slug}: preferido pero está roto → sigue off")
+                    continue
+                rotas = sorted(
+                    {
+                        proveedores[mid]
+                        for mid in mod.scan.requires
+                        if mid in proveedores and self.index.get(proveedores[mid]).raw.get("broken")
+                    }
+                )
+                if rotas:
+                    mensajes.append(f"! {slug}: preferido pero necesita librerías rotas ({', '.join(rotas)}) → sigue off")
+                    continue
+                self.edit(slug, state=State.ON)
+                mensajes.append(f"on  {slug}")
+            elif eleccion == "discard" and mod.state is not State.OFF:
+                nota = ("descartado por el usuario (duplicado de función). " + mod.note).strip()
+                self.edit(slug, state=State.OFF, note=nota)
+                mensajes.append(f"off {slug}")
+        self.recalculate_libraries()
+        return mensajes
+
+    def register_patched(self, slug: str, jar: Path, *, note: str = "", enable: bool = False) -> Mod:
+        """Anota un jar reconstruido con un parche propio.
+
+        A partir de aquí ese jar le gana al original en cada despliegue. Se copia a `pack/patched/`
+        y se guarda su hash: si alguien recompila y olvida copiarlo, `fetch` se niega en vez de
+        desplegar el original y deshacer el parche sin que se note.
+        """
+        slug = self.index.resolve(slug)
+        mod = self.index.get(slug)
+        if not jar.is_file():
+            raise ManagerError(f"no existe el jar {jar}")
+        self.cfg.patched_dir.mkdir(parents=True, exist_ok=True)
+        destino = self.cfg.patched_dir / jar.name
+        if jar.resolve() != destino.resolve():
+            import shutil
+
+            shutil.copy2(jar, destino)
+        mod.patched = destino.name
+        mod.raw["patched"] = {"filename": destino.name, "sha512": sha512_of(destino)}
+        if note:
+            mod.note = note
+        if enable:
+            mod.state = State.ON
+        self.index.save(mod)
+        return mod
 
     def plan_deploy(self, targets: list[str] | None = None) -> Plan:
         return self.deployer.plan(targets)

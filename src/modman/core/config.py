@@ -33,6 +33,8 @@ class Config:
     mc_version: str = ""
     loader: str = ""
     docs_dir: Path | None = None
+    descriptions_file: Path | None = None
+    doc_texts: dict = field(default_factory=dict)
     user_agent: str = "modman (https://github.com/noctivulp-ch/modman)"
     extra: dict = field(default_factory=dict)
 
@@ -154,6 +156,10 @@ def load(path: Path | None = None, start: Path | None = None) -> Config:
         mc_version=str(game.get("version", "")),
         loader=str(game.get("loader", "")),
         docs_dir=resolve(docs["dir"]) if docs.get("dir") else None,
+        descriptions_file=resolve(docs["descriptions"]) if docs.get("descriptions") else None,
+        # Los títulos e introducciones de los documentos generados: lo que en el script original
+        # era texto fijo de un pack concreto.
+        doc_texts={k: v for k, v in docs.items() if isinstance(v, str) and k not in {"dir", "descriptions"}},
         user_agent=str(raw.get("user_agent", Config.user_agent)),
         extra=raw,
     )
@@ -182,9 +188,13 @@ accepts = ["{t1_accepts}"]   # qué lados aterrizan aquí: server · client · b
 # path = "~/.local/share/PrismLauncher/instances/MiPack/minecraft/mods"
 # accepts = ["client"]
 
-# Opcional: dónde escribe `modman catalog` los documentos generados.
+# Opcional: dónde escribe `modman catalog` los documentos generados, y qué texto
+# llevan. `descriptions` es un TOML de `slug = "qué es este mod"`.
 # [docs]
 # dir = "docs"
+# descriptions = "docs/descripciones.toml"
+# catalog_title = "Catálogo de mods del pack"
+# catalog_intro = "Generado desde el índice; no editar a mano."
 """
 
 

@@ -131,6 +131,17 @@ def to_raw(mod: Mod) -> dict:
         if actual:
             raw[tabla] = actual
 
+    # El escaneo también, y por el mismo motivo: `Mod.scan` y `raw["scan"]` no pueden divergir.
+    # Un `Mod` construido en código con sus modids y guardado los perdía, y el grafo de
+    # dependencias dejaba de ver quién provee qué sin que nada fallara a la vista.
+    actualizar(
+        "scan",
+        {
+            "modids": list(mod.scan.modids),
+            "required": list(mod.scan.requires),
+            "optional": list(mod.scan.optional),
+        },
+    )
     actualizar("version", {"id": mod.version_id, "number": mod.version_number})
     actualizar("download", {"filename": mod.filename, "url": mod.url, "sha512": mod.sha512})
     actualizar("patched", {"filename": mod.patched})

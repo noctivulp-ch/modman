@@ -196,8 +196,33 @@ no se congele con doscientos jars.
 No tiene lógica propia: llama al mismo `core.manager` que la CLI. Si decidiera algo por su cuenta,
 el pack acabaría con dos verdades.
 
+## El ciclo de decisión
+
+`catalog` no genera solo documentación: genera **la interfaz para decidir**. Las hojas de
+duplicados y de caídos llevan casillas de tarea, clicables en Obsidian y en GitHub:
+
+```bash
+modman catalog        # escribe los documentos… y antes lee las casillas marcadas
+# (marcar prefiero/descarte en mods-duplicados.md)
+modman catalog        # recoge las marcas y las guarda en el índice
+modman apply-picks    # prefiero → on, descarte → off
+modman deploy
+```
+
+El orden importa: se lee **antes** de regenerar, o cada regeneración borraría lo que se acaba de
+marcar. `apply-picks` no enciende un mod marcado como roto ni uno que dependa de una librería
+rota; encenderlo solo consigue que el servidor no arranque y que cueste ver por qué.
+
+Para un jar reconstruido con un parche propio:
+
+```bash
+modman patched tide ./build/tide-2.1.1-cnny.jar --note "sin EntityRenderDispatcherMixin"
+```
+
+A partir de ahí ese jar gana al original en cada despliegue, y se guarda su hash: si falta o
+cambia, el despliegue **se niega** en vez de poner el original y deshacer el parche en silencio.
+
 ## Estado
 
-Núcleo, CLI y TUI funcionando, verificados contra un pack real de 191 mods. 37 tests. Faltan tres
-comandos del original (`catalog`, `apply-picks`, `patched`) y la documentación en `docs/`. Ver
-`TODO.md`.
+Núcleo, CLI y TUI funcionando, con los 19 comandos del original. Verificado contra un pack real de
+191 mods. 52 tests. Faltan la documentación en `docs/` y migrar el repo de origen. Ver `TODO.md`.

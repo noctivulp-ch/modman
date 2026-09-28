@@ -268,6 +268,45 @@ COMMANDS: tuple[Command, ...] = (
         examples=("modman ledger", "modman ledger -n 5 --json"),
     ),
     Command(
+        "catalog",
+        "regenerar los documentos del pack desde el índice",
+        "Escribe el catálogo, la hoja de duplicados y la de caídos. ANTES lee las casillas que se "
+        "hayan marcado en esos documentos y las guarda en el índice: por eso hay que regenerar "
+        "después de marcar, y por eso regenerar no pierde las marcas.",
+        mutates="los documentos de [docs].dir y las marcas en el índice",
+        flags=(Flag("--dry", "mostrar qué se escribiría, sin escribir"),),
+        examples=("modman catalog --dry", "modman catalog"),
+        json_output=False,
+    ),
+    Command(
+        "apply-picks",
+        "aplicar las marcas de duplicados: prefiero → on, descarte → off",
+        "Lee lo marcado en mods-duplicados.md (ya guardado en el índice por catalog) y cambia los "
+        "estados. No enciende un mod marcado como roto ni uno que dependa de una librería rota. "
+        "Recalcula las librerías al terminar; después hay que desplegar.",
+        mutates="el estado y las notas del índice",
+        examples=("modman catalog && modman apply-picks && modman deploy",),
+        json_output=False,
+    ),
+    Command(
+        "patched",
+        "registrar un jar reconstruido con un parche propio",
+        "Copia el jar a pack/patched/, guarda su hash y hace que gane al original en cada "
+        "despliegue. Si luego falta o no cuadra el hash, el despliegue se niega en vez de poner el "
+        "original y deshacer el parche sin avisar.",
+        mutates="el índice y pack/patched/",
+        args=(Arg("slug", "mod al que pertenece"), Arg("jar", "ruta del jar reconstruido")),
+        flags=(
+            Flag("--note", "qué se parcheó y por qué", kind="value"),
+            Flag("--on", "además, ponerlo en estado on"),
+        ),
+        examples=(
+            "modman patched tide ./build/tide-2.1.1-cnny.jar --note 'sin EntityRenderDispatcherMixin'",
+            "modman patched terra ./terra-cnny.jar --on",
+        ),
+        json_output=False,
+    ),
+    Command(
         "help",
         "referencia completa de los comandos",
         "Todo en un bloque, para leerlo de una vez. Con --json entrega la especificación de cada "
