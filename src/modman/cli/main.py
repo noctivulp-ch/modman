@@ -24,6 +24,7 @@ from ..core.ledger import LedgerError
 from ..core.manager import ManagerError, Modman
 from ..core.model import Action, Side, State
 from ..core.sources.base import SourceError
+from . import spec
 from .render import Out
 
 ERRORES = (ConfigError, ManagerError, IndexError_, LedgerError, SourceError)
@@ -408,91 +409,133 @@ def cmd_targets(a, out: Out) -> int:
     return 0
 
 
+def cmd_help(a, out: Out) -> int:
+    """Referencia completa, o el detalle de un comando.
+
+    Con `--json` entrega la especificación entera. Es lo que permite a un agente saber qué puede
+    lanzar sin tocar el pack (`read_only`) y qué le va a escribir (`writes`), sin tener que parsear
+    el texto de `--help`.
+    """
+    if a.command:
+        cmd = spec.BY_NAME.get(a.command)
+        if cmd is None:
+            out.warn(f"no hay ningún comando {a.command!r}. Están: {', '.join(spec.BY_NAME)}")
+            return 2
+        if out.as_json:
+            out.json(cmd.to_json())
+            return 0
+        out.line(out.paint(f"modman {cmd.name}", "fuerte") + f" — {cmd.help}")
+        out.line()
+        out.line(cmd.description)
+        out.line()
+        out.line(cmd.epilog())
+        return 0
+
+    if out.as_json:
+        out.json(
+            {
+                "version": __version__,
+                "config_file": _config.CONFIG_NAME,
+                "commands": [c.to_json() for c in spec.COMMANDS],
+            }
+        )
+        return 0
+    out.line(out.paint(f"modman {__version__}", "fuerte") + " — gestión de los mods de un modpack")
+    out.line()
+    out.line("Solo lectura (seguros de lanzar en cualquier momento):")
+    out.table(
+        ["comando", "qué hace"],
+        [[c.name, c.help] for c in spec.COMMANDS if c.read_only],
+    )
+    out.line()
+    out.line("Escriben algo:")
+    out.table(
+        ["comando", "qué hace", "escribe"],
+        [[c.name, c.help, c.mutates] for c in spec.COMMANDS if not c.read_only],
+        optional=[1],
+    )
+    out.line()
+    out.note("modman help <comando> para el detalle · modman --json help para la especificación")
+    return 0
+
+
 # ------------------------------------------------------------------- parser --
 def _open(a) -> Modman:
     return Modman.open(Path(a.config) if a.config else None)
 
 
 def build_parser() -> argparse.ArgumentParser:
+    """Construye el parser a partir de `spec.COMMANDS`.
+
+    Una sola fuente de verdad para el parser y para `modman help --json`: así una opción nueva
+    aparece en la ayuda sin que haya que acordarse de escribirla dos veces.
+    """
     p = argparse.ArgumentParser(
         prog="modman",
         description="Gestión de los mods de un modpack: un índice en git, N destinos.",
-        epilog="Cada comando de consulta acepta --json. La configuración del pack va en modman.toml.",
+        epilog=(
+            "Los comandos de consulta aceptan --json. `modman help` da la referencia completa y "
+            "`modman --json help` la especificación de cada comando, con qué escribe cada uno."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     p.add_argument("--version", action="version", version=f"modman {__version__}")
     p.add_argument("--config", help=f"ruta de un {_config.CONFIG_NAME} concreto")
     p.add_argument("--json", action="store_true", help="salida en JSON, para scripts y agentes")
     sub = p.add_subparsers(dest="cmd", metavar="comando")
 
-    def add(nombre, func, ayuda):
-        sp = sub.add_parser(nombre, help=ayuda)
-        sp.set_defaults(func=func)
-        return sp
+    funciones = {
+        "init": cmd_init,
+        "status": cmd_status,
+        "targets": cmd_targets,
+        "find": cmd_find,
+        "versions": cmd_versions,
+        "deps": cmd_deps,
+        "doctor": cmd_doctor,
+        "check": cmd_check,
+        "set": cmd_set,
+        "scan": cmd_scan,
+        "libs": cmd_libs,
+        "deploy": cmd_deploy,
+        "add": cmd_add,
+        "update": cmd_update,
+        "rollback": cmd_rollback,
+        "ledger": cmd_ledger,
+        "help": cmd_help,
+    }
 
-    sp = add("init", cmd_init, "crear un modman.toml de partida")
-    sp.add_argument("dir", nargs="?", help="directorio del pack (por defecto, el actual)")
-    sp.add_argument("--mc", help="versión de Minecraft")
-    sp.add_argument("--loader", help="neoforge · forge · fabric · quilt")
-    sp.add_argument("--client-only", action="store_true", help="pack sin servidor")
-    sp.add_argument("--force", action="store_true", help="reescribir si ya existe")
-
-    add("status", cmd_status, "tabla de mods y su presencia en cada destino")
-    add("targets", cmd_targets, "los destinos configurados y si existen")
-
-    sp = add("find", cmd_find, "buscar por slug, nombre o jar")
-    sp.add_argument("pattern")
-
-    sp = add("versions", cmd_versions, "versiones publicadas de un mod")
-    sp.add_argument("slug")
-    sp.add_argument("-n", type=int, default=15, help="cuántas mostrar")
-    sp.add_argument("--all", action="store_true", help="sin filtrar por MC/loader")
-    sp.add_argument("--files", action="store_true", help="listar los archivos de cada versión")
-
-    sp = add("deps", cmd_deps, "dependencias de un mod y quién las provee")
-    sp.add_argument("slug")
-
-    add("doctor", cmd_doctor, "¿algún mod activo le falta una dependencia en su lado?")
-
-    sp = add("check", cmd_check, "¿hay versiones más nuevas?")
-    sp.add_argument("slugs", nargs="*")
-    sp.add_argument("--all", action="store_true", help="comprobar todo el índice")
-
-    sp = add("set", cmd_set, "editar decisiones: side=, state=, group=, note=")
-    sp.add_argument("slug")
-    sp.add_argument("assignments", nargs="+", metavar="clave=valor")
-
-    sp = add("scan", cmd_scan, "re-escanear jars y ver qué opina la heurística")
-    sp.add_argument("slugs", nargs="*")
-
-    sp = add("libs", cmd_libs, "recalcular lado y estado de las librerías")
-    sp.add_argument("--dry", action="store_true", help="mostrar sin escribir")
-
-    sp = add("deploy", cmd_deploy, "sincronizar los destinos con el índice")
-    sp.add_argument("--dry", action="store_true", help="mostrar el plan sin tocar nada")
-    sp.add_argument("--target", action="append", help="limitar a un destino (repetible)")
-
-    sp = add("add", cmd_add, "registrar mods nuevos (y sus dependencias)")
-    sp.add_argument("slugs", nargs="+")
-    sp.add_argument("--side", choices=[s.value for s in Side])
-    sp.add_argument("--state", choices=[s.value for s in State], default=State.ON.value)
-    sp.add_argument("--group", help="grupo de duplicados")
-    sp.add_argument("--note", help="por qué está aquí")
-    sp.add_argument("--version", dest="version", help="fijar una versión concreta")
-    sp.add_argument("--file", help="elegir una variante del archivo")
-    sp.add_argument("--no-deps", action="store_true", help="no arrastrar dependencias")
-
-    sp = add("update", cmd_update, "actualizar mods (con copia previa) y redesplegar")
-    sp.add_argument("slugs", nargs="+")
-    sp.add_argument("--version", dest="version", help="fijar una versión concreta")
-    sp.add_argument("--file", help="elegir una variante del archivo")
-    sp.add_argument("--no-deploy", action="store_true", help="no desplegar después")
-
-    sp = add("rollback", cmd_rollback, "volver a la versión anterior")
-    sp.add_argument("slug")
-    sp.add_argument("--no-deploy", action="store_true")
-
-    sp = add("ledger", cmd_ledger, "historial de cambios de versión")
-    sp.add_argument("-n", type=int, default=20)
+    for cmd in spec.COMMANDS:
+        # La marca de escritura va en la ayuda corta: es lo primero que necesita saber quien
+        # automatiza, y en el listado de `--help` no hay sitio para más.
+        etiqueta = cmd.help if cmd.read_only else f"{cmd.help} [escribe]"
+        sp = sub.add_parser(
+            cmd.name,
+            help=etiqueta,
+            description=cmd.description,
+            epilog=cmd.epilog(),
+            formatter_class=argparse.RawDescriptionHelpFormatter,
+        )
+        for arg in cmd.args:
+            sp.add_argument(arg.name, nargs=arg.nargs, help=arg.help) if arg.nargs else sp.add_argument(
+                arg.name, help=arg.help
+            )
+        for f in cmd.flags:
+            kwargs: dict = {"help": f.help}
+            if f.kind == "store_true":
+                kwargs["action"] = "store_true"
+            elif f.kind == "append":
+                kwargs["action"] = "append"
+            elif f.kind == "int":
+                kwargs["type"] = int
+                kwargs["default"] = f.default
+            else:
+                kwargs["default"] = f.default
+            if f.choices:
+                kwargs["choices"] = list(f.choices)
+            if f.dest:
+                kwargs["dest"] = f.dest
+            sp.add_argument(f.name, **kwargs)
+        sp.set_defaults(func=funciones[cmd.name])
 
     return p
 

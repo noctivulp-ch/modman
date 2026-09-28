@@ -22,7 +22,7 @@ grupo de duplicados y **el motivo**. Los jars se deducen de ahí, no al revés.
 
 ```bash
 uv tool install --from /ruta/a/modman modman        # o: pipx install /ruta/a/modman
-modman --help
+modman help                                          # referencia completa
 ```
 
 El núcleo y la CLI **no tienen dependencias**: se usan en repos ajenos y en CI, donde cada
@@ -30,7 +30,31 @@ dependencia es una razón más para que no arranque. La TUI sí necesita Textual
 
 ```bash
 uv tool install --from /ruta/a/modman "modman[tui]"
+modman-tui
 ```
+
+## Para agentes y automatización
+
+`-h`/`--help` está en el comando raíz y en cada subcomando, con la descripción, **qué escribe** y
+ejemplos reales. Además:
+
+```bash
+modman help                 # referencia completa, separando lo que solo lee de lo que escribe
+modman help deploy          # detalle de un comando
+modman --json help          # la especificación entera, en JSON
+```
+
+Esa última es la pensada para automatizar: cada comando trae `read_only`, `writes`, sus opciones
+—si toman valor, si son repetibles, qué valores admiten— y ejemplos. Sirve para saber qué se puede
+lanzar sin tocar el pack sin tener que parsear el texto de la ayuda:
+
+```bash
+modman --json help | jq '[.commands[] | select(.read_only) | .name]'
+```
+
+Los comandos que escriben lo dicen en su propia ayuda (`Escribe: las carpetas de mods de los
+destinos`) y llevan `[escribe]` en el listado. `doctor` devuelve código 1 si encuentra problemas,
+para encadenarlo en CI.
 
 ## Puesta en marcha
 
@@ -155,7 +179,25 @@ Un paquete externo se engancha sin que modman lo conozca:
 mixins = "mi_paquete.analizadores:MixinAnalyzer"
 ```
 
+## La TUI
+
+```bash
+modman-tui
+```
+
+Tabla de mods filtrable a la izquierda, detalle a la derecha con las dependencias y quién las
+provee. Atajos: `/` filtrar · `s` alternar on/off · `f` cambiar lado · `d` desplegar · `o` revisar
+dependencias · `r` recargar · `q` salir.
+
+Editar es inmediato; **desplegar pide confirmación** enseñando el plan exacto, porque es lo único
+que toca carpetas que el juego va a leer. La copia se hace en un hilo aparte para que la interfaz
+no se congele con doscientos jars.
+
+No tiene lógica propia: llama al mismo `core.manager` que la CLI. Si decidiera algo por su cuenta,
+el pack acabaría con dos verdades.
+
 ## Estado
 
-En desarrollo. El núcleo está y verificado contra un pack real de 191 mods; los frontends están a
-medias. Ver `TODO.md`.
+Núcleo, CLI y TUI funcionando, verificados contra un pack real de 191 mods. 37 tests. Faltan tres
+comandos del original (`catalog`, `apply-picks`, `patched`) y la documentación en `docs/`. Ver
+`TODO.md`.
