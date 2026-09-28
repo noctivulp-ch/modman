@@ -274,7 +274,10 @@ COMMANDS: tuple[Command, ...] = (
         "hayan marcado en esos documentos y las guarda en el índice: por eso hay que regenerar "
         "después de marcar, y por eso regenerar no pierde las marcas.",
         mutates="los documentos de [docs].dir y las marcas en el índice",
-        flags=(Flag("--dry", "mostrar qué se escribiría, sin escribir"),),
+        flags=(
+            Flag("--dry", "mostrar qué se escribiría, sin escribir"),
+            Flag("--force", "sobreescribir un documento que no lleve la marca de modman"),
+        ),
         examples=("modman catalog --dry", "modman catalog"),
         json_output=False,
     ),

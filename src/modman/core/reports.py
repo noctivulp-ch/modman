@@ -26,6 +26,45 @@ _ESTADO_LARGO = {State.ON: "✅ activo", State.OFF: "⛔ off", State.HOLD: "⏸ 
 _ESTADO_CORTO = {State.ON: "activo", State.OFF: "off", State.HOLD: "espera"}
 _LADO = {Side.SERVER: "servidor", Side.CLIENT: "cliente", Side.BOTH: "ambos"}
 
+# Todo lo que haya en el archivo por debajo de esta marca se conserva al regenerar.
+MARCA = "<!-- modman: lo de abajo se conserva al regenerar -->"
+
+
+def manual_tail(path: Path) -> tuple[str, bool]:
+    """`(cola escrita a mano, el archivo ya llevaba marca)`.
+
+    Distinguir las dos cosas importa: un documento sin marca puede ser uno recién creado o uno de
+    antes de que existiera la marca, con texto a mano al final que nadie quiere perder. Quien llama
+    decide, y lo que decide es no sobreescribirlo a ciegas.
+    """
+    if not path.exists():
+        return "", True  # nuevo: nada que conservar y nada que avisar
+    texto = path.read_text(encoding="utf-8")
+    if MARCA not in texto:
+        return "", False
+    return texto.split(MARCA, 1)[1].lstrip("\n"), True
+
+
+def keep_manual_tail(path: Path) -> str:
+    """Devuelve la parte escrita a mano de un documento ya existente.
+
+    Sin esto, regenerar borra lo añadido a mano. No es hipotético: en el repo de origen la hoja de
+    caídos tenía al final cuarenta líneas de diagnóstico de un fallo concreto —qué mixin, por qué
+    reventaba, qué se probó— y la primera regeneración se las llevó. Solo se salvaron porque el
+    documento no se había regenerado desde que se escribieron.
+
+    La marca la pone modman al final de lo generado, así que basta con no tocar nada por debajo.
+    """
+    if not path.exists():
+        return ""
+    texto = path.read_text(encoding="utf-8")
+    if MARCA not in texto:
+        # Documento de una versión anterior, sin marca: se conserva lo que haya tras la última
+        # sección generada, que es donde se escribe a mano.
+        return ""
+    return texto.split(MARCA, 1)[1].lstrip("\n")
+
+
 INTRO_CATALOGO = (
     "No editar a mano: se regenera desde el índice con `modman catalog`. Para cambiar algo, "
     "edita el índice (`modman set <mod> side=… state=… note=…`) y vuelve a generar."
@@ -96,6 +135,9 @@ class CatalogReporter:
 
     name = "catalog"
 
+    #: rutas que ya existían sin la marca, rellenado en cada `report`
+    unmarked: list
+
     FILES = ("mods-catalogo.md", "mods-duplicados.md", "mods-incompatibles.md")
 
     def report(self, mods: Iterable[Mod], context: dict[str, Any]) -> dict[Path, str]:
@@ -104,11 +146,21 @@ class CatalogReporter:
         desc: dict[str, str] = context.get("descriptions") or {}
         textos: dict[str, str] = context.get("texts") or {}
         hoy = context.get("today") or _dt.date.today().isoformat()
-        return {
+        generado = {
             destino / "mods-catalogo.md": self._catalogo(mods, desc, textos, hoy),
             destino / "mods-duplicados.md": self._duplicados(mods, desc, textos, hoy),
             destino / "mods-incompatibles.md": self._incompatibles(mods, desc, textos, hoy),
         }
+        salida = {}
+        # Los documentos que ya existen sin marca se apuntan aparte: sobreescribirlos podría
+        # llevarse texto escrito a mano, y eso lo decide quien llama, no este generador.
+        self.unmarked: list[Path] = []
+        for ruta, cuerpo in generado.items():
+            cola, marcado = manual_tail(ruta)
+            if not marcado:
+                self.unmarked.append(ruta)
+            salida[ruta] = cuerpo.rstrip("\n") + f"\n\n{MARCA}\n" + (f"\n{cola}" if cola else "")
+        return salida
 
     # -- catálogo --
     def _catalogo(self, mods: list[Mod], desc: dict, textos: dict, hoy: str) -> str:

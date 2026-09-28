@@ -92,11 +92,45 @@ def test_catalog_guarda_las_marcas_antes_de_regenerar(tmp_path):
     (tmp_path / "docs" / "mods-duplicados.md").write_text(
         "- `alfa` — x\n  - [x] prefiero\n", encoding="utf-8"
     )
-    m.catalog()
+    m.catalog(force=True)  # el documento del test no lleva la marca de modman
     m.index.reload()
     assert m.index.get("alfa").raw["pick"] == "prefer"
     # y la marca sigue puesta en el documento regenerado
     assert "- [x] prefiero" in (tmp_path / "docs" / "mods-duplicados.md").read_text()
+
+
+def test_no_pisa_un_documento_sin_marca(tmp_path):
+    """Pasó de verdad: regenerar se llevó cuarenta líneas de diagnóstico escritas a mano."""
+    m = pack(tmp_path, [Mod(slug="alfa", filename="a.jar")])
+    (tmp_path / "docs").mkdir()
+    doc = tmp_path / "docs" / "mods-catalogo.md"
+    doc.write_text("# viejo\n\n## análisis escrito a mano que no se puede perder\n", encoding="utf-8")
+    with pytest.raises(ManagerError, match="marca"):
+        m.catalog()
+    assert "escrito a mano" in doc.read_text(), "no debe haberlo tocado"
+
+
+def test_conserva_lo_que_hay_bajo_la_marca(tmp_path):
+    from modman.core.reports import MARCA
+
+    m = pack(tmp_path, [Mod(slug="alfa", filename="a.jar")])
+    (tmp_path / "docs").mkdir()
+    doc = tmp_path / "docs" / "mods-catalogo.md"
+    doc.write_text(f"# viejo\n\n{MARCA}\n\n## mi análisis\n\ndetalle importante\n", encoding="utf-8")
+    m.catalog()
+    nuevo = doc.read_text()
+    assert "## mi análisis" in nuevo and "detalle importante" in nuevo
+    assert "`alfa`" in nuevo, "y además regeneró lo suyo"
+    assert nuevo.count(MARCA) == 1, "la marca no debe duplicarse al regenerar"
+
+
+def test_force_permite_pisar_un_documento_sin_marca(tmp_path):
+    m = pack(tmp_path, [Mod(slug="alfa", filename="a.jar")])
+    (tmp_path / "docs").mkdir()
+    doc = tmp_path / "docs" / "mods-catalogo.md"
+    doc.write_text("# sin nada que conservar\n", encoding="utf-8")
+    m.catalog(force=True)
+    assert "`alfa`" in doc.read_text()
 
 
 def test_catalog_sin_docs_dir_dice_como_arreglarlo(tmp_path):

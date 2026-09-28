@@ -411,13 +411,18 @@ def cmd_targets(a, out: Out) -> int:
 
 def cmd_catalog(a, out: Out) -> int:
     m = _open(a)
-    documentos, recogidas = m.catalog(write=not a.dry)
+    documentos, recogidas = m.catalog(write=not a.dry, force=a.force)
     for slug, marca in sorted(recogidas.items()):
         out.line(f"  marcado en el documento → índice: {slug} {marca}")
     for ruta, contenido in documentos.items():
         lineas = contenido.count("\n")
         estado = "se escribiría" if a.dry else "escrito"
         out.line(f"  {estado}: {ruta}  ({lineas} líneas)")
+    for ruta in getattr(m, "unmarked_docs", []):
+        out.warn(
+            f"{ruta.name} existe sin la marca de modman: si tiene texto a mano al final, "
+            f"se perdería. Pon la marca antes de lo que quieras conservar, o usa --force."
+        )
     if a.dry:
         out.note("(simulado) nada se ha escrito")
     return 0

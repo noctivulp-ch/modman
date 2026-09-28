@@ -22,7 +22,7 @@ from .graph import Graph, LibraryDecision, Problem
 from .index import Index, dumps, to_raw
 from .ledger import Ledger
 from .model import Mod, Plan, Side, State
-from .reports import CatalogReporter, load_descriptions, read_checkboxes
+from .reports import MARCA, CatalogReporter, load_descriptions, read_checkboxes
 from .sources.base import Registry, RemoteVersion, Source, SourceError
 from .sources.modrinth import ModrinthSource, pick_file
 
@@ -359,7 +359,7 @@ class Modman:
 
     # ------------------------------------------------------------ documentos --
     def catalog(
-        self, *, write: bool = True, collect: bool | None = None
+        self, *, write: bool = True, collect: bool | None = None, force: bool = False
     ) -> tuple[dict[Path, str], dict[str, str]]:
         """Genera los documentos y, antes, recoge las casillas marcadas en ellos.
 
@@ -384,7 +384,17 @@ class Modman:
         }
         reporter = self.ext.reporters.get("catalog") or CatalogReporter()
         documentos = reporter.report(self.index.all().values(), contexto)
+        self.unmarked_docs = list(getattr(reporter, "unmarked", []))
         if write:
+            if self.unmarked_docs and not force:
+                nombres = ", ".join(p.name for p in self.unmarked_docs)
+                raise ManagerError(
+                    f"estos documentos ya existen y no llevan la marca de modman: {nombres}.\n"
+                    "Si tienen texto escrito a mano al final, se perdería al regenerar. Añade la línea\n\n"
+                    f"  {MARCA}\n\n"
+                    "justo antes de lo que quieras conservar, y vuelve a ejecutar. Si no hay nada que "
+                    "conservar, usa --force."
+                )
             self.cfg.docs_dir.mkdir(parents=True, exist_ok=True)
             for ruta, contenido in documentos.items():
                 ruta.write_text(contenido, encoding="utf-8")
