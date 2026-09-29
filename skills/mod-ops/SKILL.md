@@ -70,6 +70,35 @@ estado que no es ni el roto original ni uno que funcione.
 bisecar sea barato. Si volver al estado anterior cuesta dos minutos, pruebas sin miedo; si cuesta
 una tarde, empiezas a "probar con cuidado", que es como no probar.
 
+### El mundo va aparte, y se respalda ANTES de entrar
+
+**Antes de arrancar el pack ni una sola vez, copia los mundos.** No después de comprobar que
+arranca: antes. Cargar un mundo con menos mods de los que tenía cuando se creó puede costarte
+bloques, entidades y datos de mod que no vuelven, y el daño se escribe en cuanto el mundo se
+guarda —lo que pasa solo, a los pocos segundos de entrar—. Para entonces ya no hay copia previa
+que valga.
+
+```bash
+# fuera de la instancia, y a disco (no a /tmp, que suele ser RAM)
+mkdir -p ~/backups-mundos
+tar -I 'zstd -3 -T0' -cf ~/backups-mundos/<pack>-<mundo>-$(date +%Y%m%d-%H%M%S).tar.zst \
+    -C <instancia>/minecraft/saves "<Nombre del mundo>"
+```
+
+El mundo **no** va en git: es binario y enorme, el diff no dice nada y el repo se vuelve
+inmanejable. Copia comprimida aparte, y una por sesión de reparación.
+
+Cómo saber si ya hubo daño, en el log de la sesión:
+
+```bash
+grep -ciE 'missing registry|unknown block|unknown entity|Skipping block entity' logs/latest.log
+```
+
+Cero es lo que quieres ver. Si sale distinto de cero, para, restaura la copia y no vuelvas a
+entrar hasta haber devuelto los mods que faltaban. Ojo: errores de recetas o de *loot tables* que
+mencionan items de mods ausentes **no** son esto —son datapack, se arreglan solos al devolver el
+mod— y confundirlos lleva a restaurar una copia sin necesidad.
+
 ### Qué versionar y qué no
 
 | Versionar | Ignorar |
@@ -142,7 +171,11 @@ permita volver atrás sirve más que nada:
 - **Copia con fecha a pelo** (`cp -r pack pack.2026-09-28-antes-de-tocar`) si no hay nada más. Feo,
   pero un `diff -r` entre dos carpetas también responde preguntas. Acuérdate de borrarlas después.
 
-> Regla: **nunca empieces a desactivar mods en la única copia que existe.** Si el usuario no quiere
+> Regla: **nunca empieces a desactivar mods en la única copia que existe**, y **nunca arranques
+> el pack antes de haber copiado los mundos**. Lo segundo se olvida más, porque arrancar parece
+> inofensivo: no lo es si el pack ha perdido mods.
+
+> Regla: Si el usuario no quiere
 > git, pide al menos la copia con fecha antes de la primera prueba, y dilo explícitamente.
 
 ---
