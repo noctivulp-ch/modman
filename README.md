@@ -183,6 +183,60 @@ modman doctor                         # comprobarlas
 ve**, solo pierde las texturas conectadas. Sale como aviso y no cuenta para el código de salida,
 o `doctor` fallaría en CI por algo cosmético y se dejaría de mirar.
 
+### Cuando los requisitos son un menú, no una lista
+
+El caso extremo, y el que obliga a modelarlo bien: *Glowing Emissive Ores* no necesita
+Continuity. Necesita **una de doce combinaciones**, cada una válida para un loader y un rango de
+versiones, algunas con alternativas dentro (`Sodium` **o** `Embeddium`), otras con piezas
+recomendadas pero no obligatorias, y una que el propio autor desaconseja. Elegir dos a la vez es
+peor que ninguna. Un gestor de launcher no sólo no comprueba esto: no tiene dónde escribirlo.
+
+```bash
+modman requires glowing-emissive-ores --discover --save   # de dónde salen las opciones
+modman requires glowing-emissive-ores --options           # resueltas contra ESTE pack
+modman requires glowing-emissive-ores --choose neoforge-3  # fijar la del pack
+```
+
+```
+glowing-emissive-ores — requisitos  [elegida: neoforge-3]
+  ✓ neoforge-3: cubierta por glowing-emissive-ores-fusion, fusion-connected-textures ←
+    neoforge-1: faltan neocontinuity
+    neoforge-2: faltan continuity, connector; sin indexar pero parece puesto: sodium ≈ sodium-neoforge-0.8.13.jar
+  · fabric-1: no aplica a este pack
+  …
+```
+
+De las doce, tres aplican a NeoForge 1.21.1, y se ordenan **por lo que te falta de cada una**:
+la decisión real no es «¿sirve?» sino «¿cuál me cuesta menos?».
+
+**Un pack heredado no está indexado entero**, así que se miran también los jars que hay en los
+destinos sin estar en el índice. Eso no se da por cubierto —el slug de un proyecto y el modid de
+su jar no siempre coinciden— pero se enseña el jar como prueba y `doctor` lo cuenta como «no lo
+sé», no como error: tratarlo como error daría rojo en cualquier pack real y el aviso se
+aprendería a ignorar.
+
+### De dónde salen las opciones: tres niveles, no uno
+
+Esto es lo que hace que sirva para cualquier paquete y no solo para el que lo motivó. De cinco
+paquetes reales mirados, **uno** documenta sus combinaciones: `faithful-32x` no menciona un solo
+requisito y `complementary-reimagined` lo despacha en una frase. Así que la detección va de lo
+que siempre está a lo que casi nunca está:
+
+1. **Metadatos y contenido del archivo** (`core/features.py`). Un shaderpack declara en Modrinth
+   para qué cargadores es (`iris`, `optifine`, `canvas`); un `.zip` de texturas lleva dentro las
+   carpetas de OptiFine que usa. La correspondencia *capacidad → mod que la implementa, por
+   loader* la tiene modman en una tabla, no la página: cuando aparezca otro mod de texturas
+   conectadas se añade una fila y lo hereda el catálogo entero.
+2. **La descripción del proyecto** (`core/reqparse.py`). Si el autor publica sus combinaciones,
+   ganan: es él quien sabe con qué lo ha probado. Reconoce tanto `### Option N (versiones)` bajo
+   `<loader> Requirements` como la forma corriente de `# Requirements` + lista.
+3. Si la descripción no aporta nada aplicable a este pack, se usan las del paso 1.
+
+El paso 2 es un parser de prosa y **se equivoca**, así que `--discover` no escribe sin `--save`.
+Marca lo que no cuadra en lugar de callarlo: en la propia página de GEO hay un enlace escrito
+«Continuity» que apunta a *connectedness*, y sale como `[revisar: el enlace de «Continuity»
+apunta a otro proyecto]`.
+
 ### `pack_format`: el «incompatible» del menú
 
 Cada versión del juego espera un número de formato en el `pack.mcmeta` del paquete. Cuando no
@@ -325,4 +379,4 @@ se genera de la especificación real.
 ## Estado
 
 Núcleo, CLI y TUI funcionando, con los 19 comandos del original más `requires`. Verificado contra
-un pack real de 191 mods y contra uno de 340 con shaders. 66 tests. Faltan la documentación en `docs/` y migrar el repo de origen. Ver `TODO.md`.
+un pack real de 191 mods y contra uno de 340 con shaders y texturas. 74 tests. Faltan la documentación en `docs/` y migrar el repo de origen. Ver `TODO.md`.

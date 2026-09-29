@@ -82,6 +82,8 @@ class ModrinthSource:
             slug=data.get("slug", slug),
             name=data.get("title", slug),
             summary=data.get("description", ""),
+            body=data.get("body", "") or "",
+            loaders=tuple(data.get("loaders") or ()),
             declared_side=declared,
         )
 

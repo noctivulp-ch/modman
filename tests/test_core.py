@@ -439,3 +439,160 @@ def test_dos_mods_que_embeben_la_misma_libreria_no_chocan(tmp_path):
     assert plan.conflicts == []
     plan2 = Deployer(cfg, Index(cfg.index_dir), scanner=lambda p: ["m"]).plan()
     assert plan2.conflicts and "m" in plan2.conflicts[0]
+
+
+# ---------------------------------------------------------------------------------------------
+# Stacks alternativos: cuando los requisitos no son una lista sino un menú de combinaciones
+# excluyentes. Glowing Emissive Ores publica doce; la mayoría de los paquetes, ninguna.
+# ---------------------------------------------------------------------------------------------
+BODY_GEO = """
+<summary>NeoForge Requirements</summary>
+
+### Option 1 (1.21, 1.21.1 and 26.1 to 26.2)
+- [NeoContinuity](https://modrinth.com/mod/neocontinuity/)
+### Option 2 (1.21, 1.21.1 and 26.1.2)
+- [Continuity](https://modrinth.com/mod/continuity)
+- [Sinytra Connector](https://modrinth.com/mod/connector) - (Required for Continuity)
+- [Sodium](https://modrinth.com/mod/sodium) (NeoForge Version) or [Embeddium](https://modrinth.com/mod/embeddium)
+
+<summary>Fabric/Quilt Requirements</summary>
+
+### Option 1 (1.18.2 to 26.2)
+- [Continuity](https://modrinth.com/mod/continuity)
+- [Sodium](https://modrinth.com/mod/sodium) - (Not needed, but I highly recommend this)
+### Option 2 (Not recommended)
+- [OptiFine](https://optifine.net/downloads)
+- [OptiFabric](https://www.curseforge.com/minecraft/mc-mods/optifabric)
+
+</details>
+
+## Other stuff
+- [Some random thread](https://discord.gg/whatever)
+"""
+
+
+def test_las_opciones_se_leen_de_la_descripcion_con_sus_loaders_y_versiones():
+    from modman.core.reqparse import parse_options
+
+    ops = {o.id: o for o in parse_options(BODY_GEO)}
+    assert set(ops) == {"neoforge-1", "neoforge-2", "fabric-1", "fabric-2"}
+    # «NeoForge Requirements» contiene la subcadena `forge`: la sección no es también de Forge.
+    assert ops["neoforge-1"].loaders == ("neoforge",)
+    assert ops["neoforge-1"].mc == ("1.21", "1.21.1", "26.1..26.2")
+    # Dos enlaces en una viñeta son alternativas, no dos requisitos.
+    assert ops["neoforge-2"].needs[-1].slugs == ("sodium", "embeddium")
+    # «Not needed, but I highly recommend» no es un requisito.
+    assert ops["fabric-1"].needs[-1].optional
+    # Dos viñetas son dos requisitos (OptiFine **y** OptiFabric), a diferencia de dos enlaces
+    # en la misma viñeta, que son alternativas.
+    assert not ops["fabric-2"].recommended
+    assert [n.slugs for n in ops["fabric-2"].needs] == [("optifine",), ("optifabric",)]
+    # Lo de después del bloque de requisitos no es un requisito, y un enlace de Discord no es
+    # un mod: sin las dos cosas, la última opción se llevaba media página.
+    assert len(ops["fabric-2"].needs) == 2
+
+
+def test_las_opciones_se_filtran_por_el_loader_y_la_version_del_pack():
+    from modman.core.reqparse import parse_options
+
+    ops = parse_options(BODY_GEO)
+    aplican = [o.id for o in ops if o.applies("1.21.1", "neoforge")]
+    assert aplican == ["neoforge-1", "neoforge-2"]
+    # Un rango `a..b` se resuelve comparando números, no expandiendo versiones.
+    assert [o.id for o in ops if o.applies("26.1.5", "neoforge")] == ["neoforge-1"]
+
+
+def test_los_stacks_se_ordenan_por_lo_que_falta_instalar():
+    """Lo que hace útil el menú no es saber si sirve, sino cuál cuesta menos."""
+    from modman.core.model import Choice, Kind
+    from modman.core.reqparse import parse_options
+
+    geo = Mod(slug="geo", kind=Kind.RESOURCEPACK,
+              choice=Choice(name="emisivas", options=tuple(parse_options(BODY_GEO))))
+    (informe,) = _grafo(geo, Mod(slug="sodium", version_number="0.8")).check_choices("1.21.1", "neoforge")
+    # Primero las que aplican, y entre ellas la de un mod antes que la de tres.
+    assert [e.option.id for e in informe.statuses[:2]] == ["neoforge-1", "neoforge-2"]
+    assert informe.applicable[0].missing == ["neocontinuity"]
+    assert not informe.ok
+    # Con el stack cubierto, el informe lo da por bueno y dice con qué.
+    (ok,) = _grafo(geo, Mod(slug="neocontinuity")).check_choices("1.21.1", "neoforge")
+    assert ok.ok and ok.satisfied[0].option.id == "neoforge-1"
+
+
+def test_la_opcion_elegida_manda_sobre_tener_otra_cubierta():
+    """Tener Continuity por otro motivo no significa que el stack elegido sea ese."""
+    from modman.core.model import Choice
+    from modman.core.reqparse import parse_options
+
+    geo = Mod(slug="geo", choice=Choice(options=tuple(parse_options(BODY_GEO)), chosen="neoforge-2"))
+    (informe,) = _grafo(geo, Mod(slug="neocontinuity")).check_choices("1.21.1", "neoforge")
+    assert not informe.ok and "neoforge-2" in str(informe)
+
+
+def test_un_jar_presente_pero_sin_indexar_sale_como_pista_con_su_prueba():
+    """Un pack heredado no está indexado entero y el mod suele llevar meses en la carpeta.
+
+    No se da por cubierto —el slug del proyecto y el modid del jar no siempre coinciden— pero sí
+    se enseña el jar, y la opción deja de ordenarse como la peor de todas.
+    """
+    from modman.core.model import Choice, Need, Option
+
+    geo = Mod(slug="geo", choice=Choice(options=(
+        Option("a", needs=(Need(("neocontinuity",)),)),
+        Option("b", needs=(Need(("fusion-connected-textures",)),)),
+    )))
+    (informe,) = _grafo(geo).check_choices("1.21.1", "neoforge", {"fusion": "fusion-1.3.15b.jar"})
+    assert informe.statuses[0].option.id == "b"
+    assert informe.statuses[0].maybe_satisfied and informe.unverified and not informe.ok
+    # `sodium` no lo cubre `sodium_extra`, aunque empiece igual: sería un falso positivo.
+    from modman.core.graph import _pista
+
+    assert _pista(Need(("sodium",)), {"sodium_extra": "x.jar"}) == ""
+    assert _pista(Need(("fusion-connected-textures",)), {"fusion": "f.jar"}) == "f.jar"
+
+
+def test_un_paquete_que_no_documenta_nada_saca_sus_opciones_de_los_metadatos():
+    """El caso normal, y el que decide si esto sirve más allá de un paquete.
+
+    `complementary-reimagined` no dice en ninguna parte que necesite Iris —lo menciona de pasada
+    en una frase— pero declara `loaders = [iris, optifine]`, y un zip de texturas lleva dentro
+    las carpetas de OptiFine que usa. De ahí salen las opciones sin leer prosa.
+    """
+    from modman.core.features import options_from_pack
+
+    ops = options_from_pack({"shaderpack": True}, project_loaders=("iris", "optifine"),
+                            loader="neoforge")
+    assert [o.id for o in ops] == ["auto-iris", "auto-oculus"]
+    # En Fabric no se ofrece Oculus, que es el puerto a Forge: sería ruido delante de la buena.
+    assert [o.id for o in options_from_pack({"shaderpack": True}, project_loaders=("iris",),
+                                            loader="fabric")] == ["auto-iris"]
+    emisivas = options_from_pack({"optifine_features": ["texturas emisivas"]}, loader="neoforge")
+    assert "auto-neocontinuity" in [o.id for o in emisivas]
+    assert all(o.recommended for o in emisivas if o.id != "auto-optifine")
+
+
+def test_una_seccion_de_requisitos_sin_opciones_numeradas_es_una_opcion():
+    """La forma corriente: `# Requirements` y una lista. GEO es la excepción, no la regla."""
+    from modman.core.reqparse import parse_options
+
+    (op,) = parse_options(
+        '# Requirements\n- The mod ["Iris"](https://irisshaders.dev/download). '
+        '["Optifine"](https://optifine.net/downloads) might work as well.\n'
+    )
+    assert op.id == "web-1" and op.needs[0].slugs == ("iris", "optifine")
+
+
+def test_las_opciones_y_la_eleccion_sobreviven_al_guardado():
+    from modman.core.model import Choice, Need, Option
+
+    m = Mod(slug="geo", choice=Choice(name="emisivas", chosen="a", options=(
+        Option("a", needs=(Need(("continuity",), "1.2"), Need(("sodium",), optional=True)),
+               loaders=("fabric",), mc=("1.20.1", "1.21..1.21.4")),
+        Option("b", needs=(Need(("optifine",)),), recommended=False),
+    )))
+    vuelta = to_mod(to_raw(m), "geo").choice
+    assert vuelta.chosen == "a" and vuelta.name == "emisivas"
+    a = vuelta.option("a")
+    assert a.needs[0].min_version == "1.2" and a.needs[1].optional and a.mc == ("1.20.1", "1.21..1.21.4")
+    # `recommended = false` es un dato y el volcado no debe perderlo por ser falsy.
+    assert vuelta.option("b").recommended is False

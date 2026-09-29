@@ -599,6 +599,34 @@ Los cuatro acoplamientos reales, todos vistos en packs de verdad:
    `pack.mcmeta`; si no coincide, Minecraft lo lista bajo **Incompatible** y lo carga igual.
    Arrastrar un paquete de 1.20.1 a un pack de 1.21.1 funciona… hasta que algo se ve mal.
 
+### Cuando los requisitos son un menú y no una lista
+
+Hay paquetes cuyos requisitos son **varias combinaciones excluyentes**, una por loader y por
+rango de versiones. *Glowing Emissive Ores* publica doce. Instalar la de otro loader deja tres
+mods que no hacen nada, y mezclar dos suele ser peor que no poner ninguna.
+
+Antes de instalar nada a ojo:
+
+```bash
+modman requires <slug> --discover --save    # leer las opciones que publica el autor
+modman requires <slug> --options            # verlas resueltas contra ESTE pack, ordenadas
+modman requires <slug> --choose <id>        # fijar la elegida, para que doctor la vigile
+```
+
+Tres cosas que hay que tener presentes al leer esa salida:
+
+- **Se ordena por lo que falta**, no por lo que el autor pone primero. La opción buena suele ser
+  la que reutiliza algo que el pack ya tiene: en HyperDragons la elegida fue la de Fusion porque
+  Fusion ya estaba instalado, no la primera de la lista.
+- **Lo que está en la carpeta sin estar en el índice sale como pista, no como hecho** (`≈ jar`).
+  Si aparece, indexarlo (`modman add <slug>`) en vez de fiarse: es la diferencia entre saberlo y
+  suponerlo.
+- **La mayoría de los paquetes no documenta nada.** Ahí las opciones las deriva modman de los
+  loaders que el proyecto declara y de las carpetas de OptiFine que lleva el zip. Si un paquete
+  de texturas se ve a medias y no tiene requisitos escritos en ninguna parte, eso es lo que hay
+  que mirar: qué capacidad usa (conectadas, emisivas, CIT) y qué mod la implementa **en tu
+  loader**, que no es el mismo en Fabric, Forge y NeoForge.
+
 ### Cómo se comprueba
 
 `modman` los modela: los shaders y los paquetes de texturas son un `kind` con su destino, y las
@@ -610,6 +638,7 @@ modman requires euphoria-patches --add complementary-reimagined --kind shader \
 modman requires comp-reimagined --add iris --or oculus --min-version 1.7
 modman requires faithful --add continuity --or ctm --level partial
 modman requires <slug> --suggest     # mira dentro del zip y propone
+modman requires <slug> --options     # stacks alternativos, ordenados por lo que falta
 modman doctor                        # comprueba las declaradas + los pack_format
 ```
 

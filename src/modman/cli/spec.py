@@ -161,8 +161,11 @@ COMMANDS: tuple[Command, ...] = (
         "Las que ningún metadato trae y ningún launcher comprueba: un mod que necesita una "
         "versión concreta de un shaderpack, un shaderpack que necesita Iris u Oculus, un paquete "
         "de texturas que sin Continuity carga a medias. Sin argumentos las lista todas; con "
-        "--add las escribe en el índice; con --suggest mira dentro del zip y propone. Las "
-        "comprueba `doctor`.",
+        "--add las escribe en el índice; con --suggest mira dentro del zip y propone. Cuando los "
+        "requisitos no son una lista sino un menú de stacks excluyentes —uno por loader y rango "
+        "de versiones—, --discover los lee de la descripción del proyecto, --options los ordena "
+        "por lo que te falta de cada uno y --choose fija el que use el pack. Los comprueba "
+        "`doctor`.",
         mutates="el índice, solo con --add o --drop",
         args=(Arg("slug", "mod, shader o paquete que tiene la dependencia", nargs="?"),),
         flags=(
@@ -177,6 +180,11 @@ COMMANDS: tuple[Command, ...] = (
                  kind="value", choices=("required", "partial", "optional")),
             Flag("--reason", "por qué; se guarda y se enseña en doctor", kind="value"),
             Flag("--suggest", "mirar dentro del zip y proponer, sin escribir"),
+            Flag("--discover", "leer los requisitos de la descripción del proyecto y ordenarlos"),
+            Flag("--save", "con --discover, guardar las opciones en el índice"),
+            Flag("--options", "listar los stacks alternativos resueltos contra este pack",
+                 dest="show_options"),
+            Flag("--choose", "fijar cuál de los stacks usa este pack", kind="value"),
         ),
         examples=(
             "modman requires",
@@ -187,6 +195,9 @@ COMMANDS: tuple[Command, ...] = (
             "modman requires faithful --add continuity --or ctm --level partial "
             "--reason 'texturas conectadas de OptiFine'",
             "modman requires faithful --suggest",
+            "modman requires glowing-emissive-ores --discover --save",
+            "modman requires glowing-emissive-ores --options",
+            "modman requires glowing-emissive-ores --choose neoforge-1",
         ),
     ),
     Command(

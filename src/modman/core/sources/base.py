@@ -78,6 +78,13 @@ class RemoteProject:
     name: str = ""
     summary: str = ""
     declared_side: str = ""
+    #: La descripción larga, tal cual. Ahí es donde viven los requisitos que ningún campo
+    #: estructurado recoge: los stacks alternativos de un paquete de texturas emisivas, por
+    #: ejemplo, solo existen como prosa en la página.
+    body: str = ""
+    #: Los loaders que el proyecto declara. En un shaderpack son `iris`/`optifine`/`canvas`, y
+    #: son la única pista fiable de qué cargador necesita.
+    loaders: tuple = ()
 
 
 class SourceError(Exception):

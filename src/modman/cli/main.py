@@ -177,6 +177,10 @@ def cmd_doctor(a, out: Out) -> int:
     problemas = m.doctor()
     faltan = m.requirements()
     formatos = m.pack_formats()
+    todos_menus = [i for i in m.choices() if not i.ok]
+    # Lo que solo está sin indexar no es un fallo del pack: es un hueco del índice.
+    menus = [i for i in todos_menus if not i.unverified]
+    sin_verificar = [i for i in todos_menus if i.unverified]
     # Un requisito parcial no rompe nada: se cuenta aparte y no decide el código de salida, o
     # `doctor` en CI fallaría por un paquete de texturas que se ve a medias.
     graves = [r for r in faltan if r.blocking]
@@ -191,9 +195,13 @@ def cmd_doctor(a, out: Out) -> int:
             "pack_formats": [{"slug": f.slug, "kind": f.kind.value, "declared": f.declared,
                               "expected": f.expected, "mc_version": f.mc_version,
                               "made_for": f.made_for} for f in formatos],
+            "choices": [{"slug": i.slug, "chosen": i.chosen, "unverified": i.unverified,
+                         "closest": [{"id": e.option.id, "missing": e.missing,
+                                      "maybe": e.maybe} for e in i.applicable[:3]]}
+                        for i in todos_menus],
         })
-        return 1 if (problemas or graves) else 0
-    if not problemas and not faltan and not formatos:
+        return 1 if (problemas or graves or menus) else 0
+    if not problemas and not faltan and not formatos and not todos_menus:
         out.ok("cada mod activo tiene sus dependencias en su lado, y las declaradas se cumplen")
         return 0
     for r in graves:
@@ -204,6 +212,12 @@ def cmd_doctor(a, out: Out) -> int:
         out.note(str(r))
     for f in formatos:
         out.note(str(f))
+    for i in menus:
+        out.warn(str(i))
+    for i in sin_verificar:
+        out.note(str(i))
+    if todos_menus:
+        out.note("`modman requires <slug> --options` enseña los stacks ordenados por lo que falta")
     out.line()
     out.note(
         f"{len(problemas)} de lado + {len(graves)} declaradas + {len(avisos)} parciales + "
@@ -211,12 +225,83 @@ def cmd_doctor(a, out: Out) -> int:
         f"aborta el arranque; una declarada que no se cumple suele fallar en silencio dentro del "
         f"juego; las parciales y los pack_format cargan igual y solo se ven peor."
     )
-    return 1 if (problemas or graves) else 0
+    return 1 if (problemas or graves or menus) else 0
 
 
 def cmd_requires(a, out: Out) -> int:
     """Listar, proponer, declarar y quitar las dependencias que se escriben a mano."""
     m = _open(a)
+
+    if a.choose:
+        mod = m.choose_option(a.slug or "", a.choose)
+        out.ok(f"{mod.slug}: usa la opción {a.choose}")
+        opcion = mod.choice.option(a.choose)
+        pendientes = [n.label for n in opcion.required_needs]
+        out.note("instala lo que falte: " + ", ".join(pendientes))
+        return 0
+
+    if a.discover:
+        if not a.slug:
+            out.warn("--discover necesita un slug")
+            return 2
+        opciones = m.discover_options(a.slug, save=a.save)
+        if out.as_json:
+            out.json([{"id": o.id, "loaders": list(o.loaders), "mc": list(o.mc),
+                       "recommended": o.recommended, "note": o.note,
+                       "needs": [{"slugs": list(n.slugs), "min_version": n.min_version,
+                                  "optional": n.optional, "note": n.note} for n in o.needs]}
+                      for o in opciones])
+            return 0
+        if not opciones:
+            out.note("la descripción no declara opciones con la forma que sé leer "
+                     "(«### Option N (versiones)» bajo «<loader> Requirements»)")
+            return 0
+        for o in opciones:
+            marca = "" if o.recommended else "  [el autor lo desaconseja]"
+            versiones = ", ".join(o.mc) or "sin versiones declaradas"
+            out.line(f"  {o.id:14} {'/'.join(o.loaders) or 'cualquier loader':18} {versiones}{marca}")
+            for n in o.needs:
+                aviso = f"   ← {n.note}" if n.note.startswith("[revisar") else ""
+                out.line(f"      - {n.label}{aviso}")
+        out.line()
+        if a.save:
+            out.ok(f"{len(opciones)} opciones guardadas; elige una con --choose <id>")
+        else:
+            out.note("es un parser de prosa y se equivoca: revísalo y guárdalo con --save")
+        return 0
+
+    if a.show_options:
+        informes = m.choices()
+        if a.slug:
+            informes = [i for i in informes if a.slug in i.slug]
+        if out.as_json:
+            out.json([{"slug": i.slug, "chosen": i.chosen, "ok": i.ok,
+                       "options": [{"id": e.option.id, "applies": e.applies,
+                                    "satisfied": e.satisfied, "missing": e.missing,
+                                    "satisfied_by": e.satisfied_by,
+                                    "missing_optional": e.missing_optional,
+                                    "recommended": e.option.recommended} for e in i.statuses]}
+                      for i in informes])
+            return 0 if all(i.ok for i in informes) else 1
+        if not informes:
+            out.note("ningún mod del índice tiene stacks alternativos registrados "
+                     "(ver `modman requires <slug> --discover`)")
+            return 0
+        for i in informes:
+            out.line(f"{i.slug} — {i.name or 'opciones'}"
+                     + (f"  [elegida: {i.chosen}]" if i.chosen else ""))
+            for e in i.statuses:
+                if e.satisfied:
+                    marca = "✓"
+                elif not e.applies:
+                    marca = "·"
+                else:
+                    marca = " "
+                elegida = " ←" if e.option.id == i.chosen else ""
+                out.line(f"  {marca} {str(e):<70}{elegida}")
+            out.line()
+        out.note("✓ cubierta · = no aplica a este pack. El orden va de menos a más por instalar.")
+        return 0 if all(i.ok for i in informes) else 1
 
     if a.suggest:
         if not a.slug:

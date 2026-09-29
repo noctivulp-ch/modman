@@ -18,10 +18,10 @@ from .builtin import default_extensions
 from .config import Config
 from .deploy import Deployer, sha512_of
 from .extensions import Extensions, SideOpinion
-from .graph import Graph, LibraryDecision, MissingRequirement, PackFormatIssue, Problem
+from .graph import ChoiceReport, Graph, LibraryDecision, MissingRequirement, PackFormatIssue, Problem
 from .index import Index, dumps, to_raw
 from .ledger import Ledger
-from .model import Kind, Mod, Plan, Requirement, Side, State
+from .model import Choice, Kind, Mod, Plan, Requirement, Side, State
 from .reports import MARCA, CatalogReporter, load_descriptions, read_checkboxes
 from .sources.base import Registry, RemoteVersion, Source, SourceError
 from .sources.modrinth import ModrinthSource, pick_file
@@ -221,6 +221,79 @@ class Modman:
     def requirements(self) -> list[MissingRequirement]:
         """Dependencias declaradas a mano que no se cumplen (mod → shader, por ejemplo)."""
         return self.graph().check_requirements()
+
+    def choices(self, *, scan_targets: bool = True) -> list[ChoiceReport]:
+        """Los stacks alternativos, resueltos contra este pack y ordenados por lo que falta.
+
+        Mira también los jars que hay en los destinos sin estar en el índice, porque un pack
+        heredado casi nunca está indexado entero y el mod que cubre la opción suele llevar meses
+        en la carpeta. Se marca como pista, con el jar como prueba, no como hecho.
+        """
+        presentes: dict[str, str] = {}
+        if scan_targets:
+            for (_destino, modid), jar in self.deployer.foreign_modids(
+                list(self.cfg.active_targets)
+            ).items():
+                presentes.setdefault(modid, jar)
+        return self.graph().check_choices(self.cfg.mc_version, self.cfg.loader, presentes)
+
+    def discover_options(self, slug: str, *, save: bool = False) -> list:
+        """De dónde saca modman los stacks posibles de un paquete, en tres niveles.
+
+        El orden no es casual: va de lo que **siempre** está a lo que casi nunca está.
+
+        1. **Metadatos y contenido** (`features`): los loaders que el shaderpack declara en su
+           página, y las carpetas de OptiFine que el zip lleva dentro. Está en todos los
+           paquetes, incluidos los que no documentan nada —`faithful-32x` no menciona un solo
+           requisito—, y la correspondencia capacidad → mod la tiene modman, no la página.
+        2. **La descripción** (`reqparse`): cuando el autor publica sus combinaciones, ganan,
+           porque es él quien sabe con qué lo ha probado. Es la excepción: de cinco paquetes
+           reales mirados, uno las publica.
+        3. Si la descripción no aporta nada aplicable a este pack, se usan las del paso 1.
+
+        Devuelve lo entendido sin escribir, porque el paso 2 es un parser de prosa. Con
+        `save=True` queda en el índice, en git, con la elección al lado.
+        """
+        from .features import options_from_pack
+        from .reqparse import parse_options
+
+        mod = self.index.get(self.index.resolve(slug))
+        proyecto = self.source(mod).project(mod.project_id or mod.slug)
+        de_la_web = parse_options(getattr(proyecto, "body", ""))
+        aplicables = [o for o in de_la_web if o.applies(self.cfg.mc_version, self.cfg.loader)]
+        derivadas = options_from_pack(
+            dict(mod.raw.get("packscan") or {}),
+            kind_is_shader=mod.kind is Kind.SHADER,
+            project_loaders=tuple(getattr(proyecto, "loaders", ()) or ()),
+            loader=self.cfg.loader,
+        )
+        opciones = de_la_web if aplicables else (de_la_web + derivadas)
+        if save:
+            anterior = mod.choice
+            mod.choice = Choice(
+                name=(anterior.name if anterior else "") or "requisitos",
+                options=tuple(opciones),
+                # La elección es trabajo del usuario: volver a leer la página no la borra.
+                chosen=anterior.chosen if anterior else "",
+                reason=anterior.reason if anterior else "",
+            )
+            self.index.save(mod)
+        return opciones
+
+    def choose_option(self, slug: str, option_id: str) -> Mod:
+        """Fija cuál de los stacks es el del pack. No instala nada: eso lo decide `add`."""
+        mod = self.index.get(self.index.resolve(slug))
+        if mod.choice is None or not mod.choice.options:
+            raise ManagerError(
+                f"{mod.slug} no tiene opciones registradas; ejecuta primero "
+                f"`modman requires {mod.slug} --discover --save`"
+            )
+        if mod.choice.option(option_id) is None:
+            disponibles = ", ".join(o.id for o in mod.choice.options)
+            raise ManagerError(f"{option_id!r} no es una de sus opciones: {disponibles}")
+        mod.choice = Choice(mod.choice.name, mod.choice.options, option_id, mod.choice.reason)
+        self.index.save(mod)
+        return mod
 
     def pack_formats(self) -> list[PackFormatIssue]:
         """Paquetes de recursos que esta versión del juego marcará como incompatibles."""

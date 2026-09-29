@@ -195,6 +195,105 @@ class Requirement:
         return alt
 
 
+@dataclass(frozen=True)
+class Need:
+    """Un elemento de una opción: uno o varios mods intercambiables entre sí.
+
+    Se escribe como texto en el índice (`"sodium|embeddium>=0.6"`, `"?indium"`) porque una
+    opción lleva media docena y anidarlas en TOML convertía una línea legible en cinco tablas.
+    El `?` marca lo que el autor recomienda pero no exige.
+    """
+
+    slugs: tuple
+    min_version: str = ""
+    optional: bool = False
+    note: str = ""
+
+    @classmethod
+    def parse(cls, texto: str) -> "Need":
+        t = texto.strip()
+        opcional = t.startswith("?")
+        t = t.lstrip("?")
+        minimo = ""
+        if ">=" in t:
+            t, minimo = t.split(">=", 1)
+        return cls(tuple(x.strip() for x in t.split("|") if x.strip()), minimo.strip(), opcional)
+
+    def dump(self) -> str:
+        t = "|".join(self.slugs)
+        if self.min_version:
+            t += ">=" + self.min_version
+        return ("?" if self.optional else "") + t
+
+    @property
+    def label(self) -> str:
+        t = " o ".join(self.slugs)
+        if self.min_version:
+            t += f" >= {self.min_version}"
+        return t + (" (recomendado)" if self.optional else "")
+
+
+@dataclass(frozen=True)
+class Option:
+    """Una forma completa de cubrir una necesidad: el *stack* entero, no un mod.
+
+    Un paquete de texturas emisivas no «necesita Continuity»: necesita **una** de varias
+    combinaciones, cada una válida para un loader y un rango de versiones, y elegir dos a la vez
+    suele ser peor que ninguna. Glowing Emissive Ores publica doce entre los tres loaders.
+    """
+
+    id: str
+    needs: tuple = ()
+    loaders: tuple = ()
+    mc: tuple = ()
+    recommended: bool = True
+    note: str = ""
+
+    def applies(self, mc_version: str, loader: str) -> bool:
+        """¿Esta opción vale para el pack que tengo delante?
+
+        Sin loader o sin versiones declaradas se acepta: la mitad de las descripciones no lo
+        dicen, y descartar por falta de dato escondería la única opción viable.
+        """
+        if self.loaders and loader and loader.lower() not in {x.lower() for x in self.loaders}:
+            return False
+        return not self.mc or not mc_version or any(_mc_match(t, mc_version) for t in self.mc)
+
+    @property
+    def required_needs(self) -> tuple:
+        return tuple(n for n in self.needs if not n.optional)
+
+
+def _mc_match(token: str, version: str) -> bool:
+    """`token` es una versión exacta o un rango `a..b`, como lo publican las descripciones."""
+    if ".." not in token:
+        return token.strip() == version.strip()
+    a, _, b = token.partition("..")
+    v = version_tuple(version)
+    return version_tuple(a) <= v <= version_tuple(b)
+
+
+@dataclass(frozen=True)
+class Choice:
+    """El conjunto de opciones excluyentes, con la elegida si ya se decidió.
+
+    La decisión se guarda aparte de las opciones a propósito: las opciones son lo que publica el
+    autor y cambian cuando él las cambia; `chosen` es trabajo del usuario y no debe perderse al
+    volver a leer la descripción.
+    """
+
+    name: str = ""
+    options: tuple = ()
+    chosen: str = ""
+    reason: str = ""
+
+    def option(self, oid: str) -> "Option | None":
+        return next((o for o in self.options if o.id == oid), None)
+
+    def applicable(self, mc_version: str, loader: str) -> tuple:
+        return tuple(o for o in self.options if o.applies(mc_version, loader))
+
+
 @dataclass
 class Scan:
     """Lo que se dedujo de mirar dentro del jar. Sugerencia, nunca decisión."""
@@ -249,6 +348,8 @@ class Mod:
     scan: Scan = field(default_factory=Scan)
     #: Dependencias declaradas a mano, las que no salen de ningún metadato.
     requires: tuple = ()
+    #: Stacks alternativos: cuando no hay *una* dependencia sino varias formas de cubrirla.
+    choice: "Choice | None" = None
     raw: dict = field(default_factory=dict)
 
     @property

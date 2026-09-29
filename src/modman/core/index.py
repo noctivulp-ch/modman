@@ -15,7 +15,7 @@ import json
 import tomllib
 from pathlib import Path
 
-from .model import Kind, Level, Mod, Requirement, Scan, Side, State
+from .model import Choice, Kind, Level, Mod, Need, Option, Requirement, Scan, Side, State
 
 
 class IndexError_(Exception):
@@ -37,7 +37,11 @@ def _dump_array_of_tables(key: str, filas: list) -> list[str]:
     """`[[key]]` repetido, que es como TOML expresa una lista de tablas."""
     out: list[str] = []
     for fila in filas:
-        out += ["", f"[[{key}]]"] + [f"{k} = {_toml_value(v)}" for k, v in fila.items() if v]
+        # `if v or v is False`: un `false` es un dato —`recommended = false` marca la opción que
+        # el autor desaconseja— y el filtro ingenuo lo borraba al guardar.
+        out += ["", f"[[{key}]]"] + [
+            f"{k} = {_toml_value(v)}" for k, v in fila.items() if v or v is False
+        ]
     return out
 
 
@@ -120,7 +124,45 @@ def to_mod(raw: dict, slug: str) -> Mod:
             for r in raw.get("requires", [])
             if r.get("slug")
         ),
+        choice=_to_choice(raw),
         raw=raw,
+    )
+
+
+def _to_choice(raw: dict) -> "Choice | None":
+    """`[choice]` + `[[options]]` → `Choice`.
+
+    Las opciones van en un array de tablas al mismo nivel y no anidadas dentro de `[choice]`
+    porque cada una es una fila que se lee de un vistazo en un `git diff`, que es donde se
+    revisan. Anidarlas obligaba a tres niveles de tabla para decir «Continuity y Connector».
+    """
+    meta = raw.get("choice") or {}
+    filas = raw.get("options") or []
+    if not meta and not filas:
+        return None
+    opciones = []
+    for f in filas:
+        notas = list(f.get("notes") or [])
+        needs = []
+        for i, texto in enumerate(f.get("needs") or []):
+            n = Need.parse(str(texto))
+            nota = notas[i] if i < len(notas) else ""
+            needs.append(Need(n.slugs, n.min_version, n.optional, nota) if nota else n)
+        opciones.append(
+            Option(
+                id=str(f.get("id", "")),
+                needs=tuple(needs),
+                loaders=tuple(f.get("loaders") or ()),
+                mc=tuple(str(x) for x in (f.get("mc") or ())),
+                recommended=bool(f.get("recommended", True)),
+                note=str(f.get("note", "")),
+            )
+        )
+    return Choice(
+        name=str(meta.get("name", "")),
+        options=tuple(opciones),
+        chosen=str(meta.get("chosen", "")),
+        reason=str(meta.get("reason", "")),
     )
 
 
@@ -185,6 +227,23 @@ def to_raw(mod: Mod) -> dict:
               "level": r.level.value if r.level is not Level.REQUIRED else "",
               "reason": r.reason}.items() if v}
             for r in mod.requires
+        ]
+    if mod.choice is not None:
+        c = mod.choice
+        raw["choice"] = {k: v for k, v in
+                         {"name": c.name, "chosen": c.chosen, "reason": c.reason}.items() if v}
+        raw["options"] = [
+            {k: v for k, v in {
+                "id": o.id,
+                "needs": [n.dump() for n in o.needs],
+                "notes": [n.note for n in o.needs] if any(n.note for n in o.needs) else [],
+                "loaders": list(o.loaders),
+                "mc": list(o.mc),
+                # `recommended` solo cuando es falso: es lo excepcional y así la fila no crece.
+                "recommended": None if o.recommended else False,
+                "note": o.note,
+            }.items() if v or v is False}
+            for o in c.options
         ]
     actualizar("version", {"id": mod.version_id, "number": mod.version_number})
     actualizar("download", {"filename": mod.filename, "url": mod.url, "sha512": mod.sha512})
