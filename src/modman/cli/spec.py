@@ -166,7 +166,7 @@ COMMANDS: tuple[Command, ...] = (
         "de versiones—, --discover los lee de la descripción del proyecto, --options los ordena "
         "por lo que te falta de cada uno y --choose fija el que use el pack. Los comprueba "
         "`doctor`.",
-        mutates="el índice, solo con --add o --drop",
+        mutates="el índice, solo con --add, --drop, --choose o --discover --save",
         args=(Arg("slug", "mod, shader o paquete que tiene la dependencia", nargs="?"),),
         flags=(
             Flag("--add", "slug del que se necesita", kind="value"),
