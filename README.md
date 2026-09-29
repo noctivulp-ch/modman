@@ -160,7 +160,7 @@ Cuatro enganches, con contrato explícito. Ver `docs/arquitectura/extensiones.md
 | `Analyzer` | hechos observados de un jar | `jarscan` |
 | `SideAdvisor` | una opinión sobre el lado, con su motivo y confianza | 4 reglas |
 | `Reporter` | documentos generados desde el índice | catálogo |
-| `Source` | de dónde salen los jars | Modrinth |
+| `Source` | de dónde salen los jars | Modrinth y CurseForge |
 
 Dos decisiones que sostienen esto:
 
@@ -195,6 +195,26 @@ no se congele con doscientos jars.
 
 No tiene lógica propia: llama al mismo `core.manager` que la CLI. Si decidiera algo por su cuenta,
 el pack acabaría con dos verdades.
+
+## CurseForge
+
+Media biblioteca de mods no está en Modrinth, así que hay una segunda fuente. **Necesita una API
+key gratuita** de [console.curseforge.com](https://console.curseforge.com) (sección «API Keys»);
+sin ella la API devuelve 403 y modman simplemente no registra la fuente:
+
+```bash
+mkdir -p ~/.config/modman && echo '<tu-key>' > ~/.config/modman/curseforge.key
+# o: export CURSEFORGE_API_KEY=<tu-key>
+```
+
+Hay un tercer camino, desactivado por defecto: reutilizar la key que trae embebida el launcher
+instalado (`[curseforge] use_launcher_key = true`). Funciona, pero esa key está emitida a nombre de
+esa aplicación, así que la decisión es de quien ejecuta y no de la herramienta.
+
+Dos diferencias con Modrinth que el código ya contempla: CurseForge publica **SHA-1** y no SHA-512
+—`RemoteFile` guarda los dos y verifica con el que haya—, y algunos autores **prohíben la descarga
+por terceros**, en cuyo caso `downloadUrl` viene vacío y el error lo dice en lugar de fallar con un
+404 sin explicación.
 
 ## El ciclo de decisión
 

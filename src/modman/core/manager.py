@@ -85,6 +85,21 @@ class Modman:
         self.sources = sources or Registry()
         if not self.sources.names:
             self.sources.register(ModrinthSource(config.user_agent))
+            # CurseForge solo si hay key: sin ella la API devuelve 403 y registrar la fuente
+            # solo serviría para fallar más tarde con un mensaje peor.
+            try:
+                from .sources.curseforge import CurseForgeSource
+
+                self.sources.register(
+                    CurseForgeSource(
+                        config.user_agent,
+                        game_version=config.mc_version,
+                        loader=config.loader,
+                        allow_launcher_key=bool(config.extra.get("curseforge", {}).get("use_launcher_key")),
+                    )
+                )
+            except SourceError:
+                pass
         for nombre, fuente in self.ext.sources.items():  # fuentes aportadas por plugins
             if nombre not in self.sources:
                 self.sources.register(fuente)

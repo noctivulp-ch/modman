@@ -188,6 +188,14 @@ accepts = ["{t1_accepts}"]   # qué lados aterrizan aquí: server · client · b
 # path = "~/.local/share/PrismLauncher/instances/MiPack/minecraft/mods"
 # accepts = ["client"]
 
+# Opcional: CurseForge. Hace falta una API key gratuita de
+# https://console.curseforge.com, en ~/.config/modman/curseforge.key o en la
+# variable CURSEFORGE_API_KEY. `use_launcher_key` reutiliza la del launcher
+# instalado: está emitida a nombre de esa aplicación, así que actívalo solo si
+# sabes lo que implica.
+# [curseforge]
+# use_launcher_key = false
+
 # Opcional: dónde escribe `modman catalog` los documentos generados, y qué texto
 # llevan. `descriptions` es un TOML de `slug = "qué es este mod"`.
 # [docs]

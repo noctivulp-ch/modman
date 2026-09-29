@@ -22,8 +22,20 @@ class RemoteFile:
     filename: str
     url: str
     sha512: str = ""
+    #: CurseForge no publica SHA-512; da SHA-1. Se guardan los dos para poder verificar la
+    #: descarga con el que la fuente ofrezca, en vez de renunciar a comprobarla.
+    sha1: str = ""
     size: int = 0
     primary: bool = True
+
+    @property
+    def checksum(self) -> tuple[str, str] | None:
+        """`(algoritmo, valor)` del hash disponible, o None si la fuente no da ninguno."""
+        if self.sha512:
+            return ("sha512", self.sha512)
+        if self.sha1:
+            return ("sha1", self.sha1)
+        return None
 
 
 @dataclass(frozen=True)
