@@ -22,7 +22,26 @@ from pathlib import Path
 
 from .config import Config
 from .index import Index
-from .model import Action, Mod, Plan, Step, Target
+from .model import Action, Kind, Mod, Plan, Step, Target
+
+#: Qué archivos mira modman en un destino, según lo que ese destino acepte. Un shaderpack es un
+#: `.zip` (o una carpeta ya descomprimida) y no un `.jar`: buscar solo jars dejaba las carpetas de
+#: shaders y de recursos como si estuvieran vacías.
+PATRONES = {
+    Kind.MOD: ("*.jar", "*.jar.disabled"),
+    Kind.SHADER: ("*.zip",),
+    Kind.RESOURCEPACK: ("*.zip",),
+    Kind.DATAPACK: ("*.zip",),
+}
+
+
+def patrones_de(target: Target) -> tuple[str, ...]:
+    vistos: list[str] = []
+    for k in target.kinds:
+        for p in PATRONES.get(k, ("*.jar",)):
+            if p not in vistos:
+                vistos.append(p)
+    return tuple(vistos)
 
 
 def sha512_of(path: Path) -> str:
@@ -62,9 +81,12 @@ class Deployer:
         el jar viejo al lado del nuevo y el juego cargaría dos.
         """
         names: set[str] = set()
+        sufijo = mod.kind.deployed_disabled_suffix
         for base in (mod.filename, mod.artifact, *mod.raw.get("previous", [])):
             if base:
-                names |= {base, base + ".disabled"}
+                names.add(base)
+                if sufijo:
+                    names.add(base + sufijo)
         return names
 
     def managed_names(self) -> set[str]:
@@ -80,6 +102,8 @@ class Deployer:
         for t in targets:
             if not t.path.is_dir():
                 continue
+            if Kind.MOD not in t.kinds:
+                continue    # el choque de modid solo tiene sentido entre mods
             for jar in sorted(t.path.glob("*.jar*")):
                 if jar.name in managed:
                     continue
@@ -94,7 +118,10 @@ class Deployer:
         for t in targets:
             if not t.path.is_dir():
                 continue
-            extra = sorted(j.name for j in t.path.glob("*.jar*") if j.name not in managed)
+            presentes: set[str] = set()
+            for patron in patrones_de(t):
+                presentes |= {p.name for p in t.path.glob(patron)}
+            extra = sorted(n for n in presentes if n not in managed)
             if extra:
                 out[t.name] = extra
         return out
@@ -113,7 +140,7 @@ class Deployer:
             choques = [
                 (t.name, foreign[(t.name, mid)])
                 for t in targets
-                for mid in mod.scan.modids
+                for mid in mod.scan.own_modids
                 if (t.name, mid) in foreign
             ]
             if choques:
@@ -125,7 +152,8 @@ class Deployer:
                 continue
 
             for t in targets:
-                quiere = mod.deployed_name if t.wants(mod.side) else None
+                quiere = mod.deployed_name if t.wants(mod.side, mod.kind) else None
+                quiere = quiere or None
                 presentes = [t.path / v for v in self.variants(mod) if (t.path / v).exists()]
 
                 if quiere is None:

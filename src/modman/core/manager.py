@@ -18,10 +18,10 @@ from .builtin import default_extensions
 from .config import Config
 from .deploy import Deployer, sha512_of
 from .extensions import Extensions, SideOpinion
-from .graph import Graph, LibraryDecision, Problem
+from .graph import Graph, LibraryDecision, MissingRequirement, PackFormatIssue, Problem
 from .index import Index, dumps, to_raw
 from .ledger import Ledger
-from .model import Mod, Plan, Side, State
+from .model import Kind, Mod, Plan, Requirement, Side, State
 from .reports import MARCA, CatalogReporter, load_descriptions, read_checkboxes
 from .sources.base import Registry, RemoteVersion, Source, SourceError
 from .sources.modrinth import ModrinthSource, pick_file
@@ -120,8 +120,9 @@ class Modman:
     def _modids_of(self, jar: Path) -> list[str]:
         """Modids de un jar ajeno; escaneo barato, que es lo que necesita el desplegador."""
         facts = self.ext.analyze(jar, only=["jarscan"])
-        provides = facts.get("provides") or ()
-        return sorted(str(p) for p in provides)
+        datos = facts.of("jarscan")
+        propios = datos.get("own") or datos.get("provides") or ()
+        return sorted(str(p) for p in propios)
 
     def fetch(self, mod: Mod) -> Path:
         """La ruta local del jar que toca desplegar, descargándolo si falta.
@@ -163,7 +164,7 @@ class Modman:
         for slug, mod in sorted(self.index.all().items()):
             presencia = {}
             for t in destinos:
-                if not t.wants(mod.side):
+                if not t.wants(mod.side, mod.kind):
                     presencia[t.name] = "—"
                 elif mod.deployed_name and (t.path / mod.deployed_name).exists():
                     presencia[t.name] = "on" if mod.state is State.ON else mod.state.value
@@ -217,6 +218,44 @@ class Modman:
                 salida.append((tipo, modid, proveedores.get(modid, "nadie del índice lo provee")))
         return salida
 
+    def requirements(self) -> list[MissingRequirement]:
+        """Dependencias declaradas a mano que no se cumplen (mod → shader, por ejemplo)."""
+        return self.graph().check_requirements()
+
+    def pack_formats(self) -> list[PackFormatIssue]:
+        """Paquetes de recursos que esta versión del juego marcará como incompatibles."""
+        return self.graph().check_pack_formats(self.cfg.mc_version)
+
+    def suggest_requirements(self, slug: str) -> list[Requirement]:
+        """Qué dependencias parece tener un `.zip`, mirándolo. No las escribe.
+
+        Se separa de `scan` a propósito, igual que las opiniones de lado: lo que un analizador
+        deduce se propone y lo confirma quien decide. Una propuesta escrita sola en el índice es
+        indistinguible de un hecho comprobado en cuanto pasa una semana.
+        """
+        from .builtin import suggested_requirements
+
+        mod = self.index.get(self.index.resolve(slug))
+        datos = dict(mod.raw.get("packscan") or {})
+        if not datos:
+            facts = self.ext.analyze(self.fetch(mod), only=["packscan"])
+            datos = facts.of("packscan")
+        ya = {r.slug for r in mod.requires}
+        return [r for r in suggested_requirements(datos) if r.slug not in ya]
+
+    def add_requirement(self, slug: str, req: Requirement) -> Mod:
+        """Declara una dependencia a mano. Sustituye la que hubiera para el mismo destino."""
+        mod = self.index.get(self.index.resolve(slug))
+        mod.requires = tuple(r for r in mod.requires if r.slug != req.slug) + (req,)
+        self.index.save(mod)
+        return mod
+
+    def drop_requirement(self, slug: str, needs: str) -> Mod:
+        mod = self.index.get(self.index.resolve(slug))
+        mod.requires = tuple(r for r in mod.requires if r.slug != needs)
+        self.index.save(mod)
+        return mod
+
     def doctor(self) -> list[Problem]:
         lados = tuple({s for t in self.cfg.active_targets for s in t.accepts} - {Side.BOTH}) or (
             Side.SERVER,
@@ -251,11 +290,25 @@ class Modman:
         for slug in objetivos:
             mod = self.index.get(slug)
             jar = self.fetch(mod)
-            facts = self.ext.analyze(jar)
+            # Un shaderpack no es un jar: pasarle el escáner de mods solo produce un error
+            # anotado y ruido en `ext.errors`. Cada tipo va por su analizador.
+            cuales = ["jarscan"] if mod.kind is Kind.MOD else ["packscan"]
+            facts = self.ext.analyze(jar, only=cuales)
+            pack = facts.of("packscan")
+            if pack and "error" not in pack:
+                # Bajo su propia clave, como cualquier analizador: `raw["pack"]` es lo que lee
+                # después `check_pack_formats` sin volver a abrir el zip.
+                if pack.get("pack"):
+                    mod.raw["pack"] = pack["pack"]
+                for clave in ("shaderpack", "resourcepack", "optifine_features", "iris_only"):
+                    if pack.get(clave):
+                        mod.raw.setdefault("packscan", {})[clave] = pack[clave]
+                self.index.save(mod)
             datos = facts.of("jarscan")
             if datos and "error" not in datos:
                 mod.raw["scan"] = _scan_to_raw(datos)
                 mod.scan.modids = sorted(str(x) for x in (datos.get("provides") or ()))
+                mod.scan.own = sorted(str(x) for x in (datos.get("own") or ()))
                 mod.scan.requires = sorted(str(x) for x in (datos.get("required") or ()))
                 mod.scan.optional = sorted(str(x) for x in (datos.get("optional") or ()))
                 self.index.save(mod)
@@ -282,6 +335,7 @@ class Modman:
         file: str | None = None,
         with_deps: bool = True,
         provider: str = "modrinth",
+        kind: Kind = Kind.MOD,
     ) -> list[Mod]:
         """Registra mods y, si hace falta, sus dependencias obligatorias.
 
@@ -301,17 +355,22 @@ class Modman:
             if proyecto.slug in self.index:
                 continue
             es_pedido = actual in pedidos
+            # Un shaderpack no declara `neoforge`: declara `iris` y `optifine`, que es a quién
+            # le habla. Filtrar por el loader del pack lo descartaría entero, así que para lo que
+            # no es un mod se filtra solo por versión del juego.
+            loader_filtro = self.cfg.loader if kind is Kind.MOD else ""
             compatibles = [
                 v
                 for v in fuente.versions(proyecto.slug)
-                if v.supports(self.cfg.mc_version, self.cfg.loader)
+                if v.supports(self.cfg.mc_version, loader_filtro)
             ]
             if version and es_pedido:
                 compatibles = [v for v in compatibles if version in (v.number, v.id)]
             if not compatibles:
                 detalle = f" con número {version}" if version and es_pedido else ""
                 raise ManagerError(
-                    f"{proyecto.slug}: no hay versión para {self.cfg.mc_version}/{self.cfg.loader}{detalle}"
+                    f"{proyecto.slug}: no hay versión para {self.cfg.mc_version}"
+                    f"{'/' + self.cfg.loader if loader_filtro else ''}{detalle}"
                 )
             elegida = compatibles[0]
             archivo = pick_file(elegida, file if es_pedido else None)
@@ -342,6 +401,11 @@ class Modman:
                     "size": archivo.size,
                 },
             }
+            if kind is not Kind.MOD:
+                raw["kind"] = kind.value
+                # Un shaderpack o un paquete de texturas es cliente por definición: no hay
+                # servidor que los lea.
+                raw["side"] = (side or Side.CLIENT).value
             if provider != "modrinth":
                 raw["provider"] = provider
             if es_pedido and file:
@@ -601,6 +665,7 @@ def _scan_to_raw(datos: dict) -> dict:
     return {
         "side": lado,
         "modids": orden(datos.get("provides")),
+        "own": orden(datos.get("own")),
         "required": orden(datos.get("required")),
         "required_client_only": orden(
             k for k, v in (datos.get("required_side") or {}).items() if v == "CLIENT"

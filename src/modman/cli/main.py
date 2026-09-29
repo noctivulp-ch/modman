@@ -22,7 +22,7 @@ from ..core.config import ConfigError
 from ..core.index import IndexError_
 from ..core.ledger import LedgerError
 from ..core.manager import ManagerError, Modman
-from ..core.model import Action, Side, State
+from ..core.model import Action, Kind, Level, Requirement, Side, State
 from ..core.sources.base import SourceError
 from . import spec
 from .render import Out
@@ -175,17 +175,111 @@ def cmd_deps(a, out: Out) -> int:
 def cmd_doctor(a, out: Out) -> int:
     m = _open(a)
     problemas = m.doctor()
+    faltan = m.requirements()
+    formatos = m.pack_formats()
+    # Un requisito parcial no rompe nada: se cuenta aparte y no decide el código de salida, o
+    # `doctor` en CI fallaría por un paquete de texturas que se ve a medias.
+    graves = [r for r in faltan if r.blocking]
+    avisos = [r for r in faltan if not r.blocking]
     if out.as_json:
-        out.json([{"side": p.side.value, "slug": p.slug, "missing": p.missing} for p in problemas])
-        return 1 if problemas else 0
-    if not problemas:
-        out.ok("cada mod activo tiene sus dependencias en su mismo lado")
+        out.json({
+            "sides": [{"side": p.side.value, "slug": p.slug, "missing": p.missing} for p in problemas],
+            "declared": [{"slug": r.slug, "needs": r.needs, "kind": r.kind.value,
+                          "wanted": r.wanted_version, "problem": r.problem, "reason": r.reason,
+                          "level": r.level.value, "blocking": r.blocking}
+                         for r in faltan],
+            "pack_formats": [{"slug": f.slug, "kind": f.kind.value, "declared": f.declared,
+                              "expected": f.expected, "mc_version": f.mc_version,
+                              "made_for": f.made_for} for f in formatos],
+        })
+        return 1 if (problemas or graves) else 0
+    if not problemas and not faltan and not formatos:
+        out.ok("cada mod activo tiene sus dependencias en su lado, y las declaradas se cumplen")
         return 0
+    for r in graves:
+        out.warn(str(r))
     for p in problemas:
         out.warn(str(p))
+    for r in avisos:
+        out.note(str(r))
+    for f in formatos:
+        out.note(str(f))
     out.line()
-    out.note(f"{len(problemas)} problemas. Un mod cuya dependencia solo está en el otro lado aborta el arranque.")
-    return 1
+    out.note(
+        f"{len(problemas)} de lado + {len(graves)} declaradas + {len(avisos)} parciales + "
+        f"{len(formatos)} de pack_format. Un mod cuya dependencia solo está en el otro lado "
+        f"aborta el arranque; una declarada que no se cumple suele fallar en silencio dentro del "
+        f"juego; las parciales y los pack_format cargan igual y solo se ven peor."
+    )
+    return 1 if (problemas or graves) else 0
+
+
+def cmd_requires(a, out: Out) -> int:
+    """Listar, proponer, declarar y quitar las dependencias que se escriben a mano."""
+    m = _open(a)
+
+    if a.suggest:
+        if not a.slug:
+            out.warn("--suggest necesita un slug")
+            return 2
+        props = m.suggest_requirements(a.slug)
+        if out.as_json:
+            out.json([{"slug": r.slug, "any_of": list(r.any_of), "kind": r.kind.value,
+                       "level": r.level.value, "reason": r.reason} for r in props])
+            return 0
+        if not props:
+            out.ok("nada que proponer: no se ve ninguna dependencia que declarar")
+            return 0
+        for r in props:
+            out.line(f"  {r.label:38} [{r.level.value}] {r.reason}")
+        out.line()
+        out.note("son propuestas; escríbelas con --add cuando las confirmes")
+        return 0
+
+    if a.drop:
+        if not a.slug:
+            out.warn("--drop necesita el slug de quien tiene la dependencia")
+            return 2
+        mod = m.drop_requirement(a.slug, a.drop)
+        out.ok(f"{mod.slug}: quitada la dependencia de {a.drop}")
+        return 0
+
+    if a.add:
+        if not a.slug:
+            out.warn("--add necesita el slug de quien tiene la dependencia")
+            return 2
+        if a.version and a.min_version:
+            out.warn("--version (exacta) y --min-version (mínima) son excluyentes")
+            return 2
+        req = Requirement(
+            slug=a.add,
+            kind=Kind(a.kind) if a.kind else Kind.MOD,
+            version=a.version or "",
+            min_version=a.min_version or "",
+            any_of=tuple(a.alternatives or ()),
+            level=Level(a.level) if a.level else Level.REQUIRED,
+            reason=a.reason or "",
+        )
+        mod = m.add_requirement(a.slug, req)
+        out.ok(f"{mod.slug} → necesita {req.label} [{req.level.value}]")
+        out.note("compruébalo con `modman doctor`")
+        return 0
+
+    mods = m.index.all()
+    filas = []
+    for slug in sorted(mods):
+        for r in mods[slug].requires:
+            filas.append([slug, r.kind.value, r.label, r.level.value, r.reason])
+    if out.as_json:
+        out.json([{"slug": f[0], "kind": f[1], "needs": f[2], "level": f[3], "reason": f[4]} for f in filas])
+        return 0
+    if not filas:
+        out.note("ninguna dependencia declarada a mano todavía (ver `modman requires --help`)")
+        return 0
+    if a.slug:
+        filas = [f for f in filas if a.slug in f[0]]
+    out.table(["quién", "tipo", "necesita", "nivel", "motivo"], filas)
+    return 0
 
 
 def cmd_check(a, out: Out) -> int:
@@ -319,6 +413,7 @@ def cmd_add(a, out: Out) -> int:
         version=a.version,
         file=a.file,
         with_deps=not a.no_deps,
+        kind=Kind(a.kind) if getattr(a, "kind", None) else Kind.MOD,
     )
     if out.as_json:
         out.json([{"slug": x.slug, "side": x.side.value, "version": x.version_number, "lib": x.lib} for x in añadidos])
@@ -534,6 +629,7 @@ def build_parser() -> argparse.ArgumentParser:
         "versions": cmd_versions,
         "deps": cmd_deps,
         "doctor": cmd_doctor,
+        "requires": cmd_requires,
         "check": cmd_check,
         "set": cmd_set,
         "scan": cmd_scan,

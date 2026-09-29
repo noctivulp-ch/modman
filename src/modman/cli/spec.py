@@ -156,6 +156,40 @@ COMMANDS: tuple[Command, ...] = (
         examples=("modman doctor", "modman doctor || echo 'revisar antes de arrancar'"),
     ),
     Command(
+        "requires",
+        "dependencias declaradas a mano (mod ↔ shader ↔ paquete de texturas)",
+        "Las que ningún metadato trae y ningún launcher comprueba: un mod que necesita una "
+        "versión concreta de un shaderpack, un shaderpack que necesita Iris u Oculus, un paquete "
+        "de texturas que sin Continuity carga a medias. Sin argumentos las lista todas; con "
+        "--add las escribe en el índice; con --suggest mira dentro del zip y propone. Las "
+        "comprueba `doctor`.",
+        mutates="el índice, solo con --add o --drop",
+        args=(Arg("slug", "mod, shader o paquete que tiene la dependencia", nargs="?"),),
+        flags=(
+            Flag("--add", "slug del que se necesita", kind="value"),
+            Flag("--drop", "quitar la dependencia con este slug", kind="value"),
+            Flag("--kind", "qué es lo que se necesita", kind="value",
+                 choices=("mod", "shader", "resourcepack", "datapack")),
+            Flag("--version", "versión exacta; se busca como subcadena en nombre y versión", kind="value"),
+            Flag("--min-version", "versión mínima, comparada por números", kind="value"),
+            Flag("--or", "alternativa que también cumple; repetible", kind="append", dest="alternatives"),
+            Flag("--level", "required (rompe) · partial (carga a medias) · optional",
+                 kind="value", choices=("required", "partial", "optional")),
+            Flag("--reason", "por qué; se guarda y se enseña en doctor", kind="value"),
+            Flag("--suggest", "mirar dentro del zip y proponer, sin escribir"),
+        ),
+        examples=(
+            "modman requires",
+            "modman requires euphoria-patcher --add complementary-reimagined --kind shader "
+            "--version r5.9.3 --reason 'parchea esa versión exacta'",
+            "modman requires complementary-reimagined --add iris --or oculus "
+            "--min-version 1.7 --reason 'un shaderpack necesita cargador'",
+            "modman requires faithful --add continuity --or ctm --level partial "
+            "--reason 'texturas conectadas de OptiFine'",
+            "modman requires faithful --suggest",
+        ),
+    ),
+    Command(
         "check",
         "¿hay versiones más nuevas?",
         "Consulta la fuente y compara con la versión instalada. No cambia nada: solo informa.",
@@ -226,6 +260,8 @@ COMMANDS: tuple[Command, ...] = (
             Flag("--version", "fijar una versión concreta", kind="value", dest="version"),
             Flag("--file", "elegir una variante del archivo", kind="value"),
             Flag("--no-deps", "no arrastrar dependencias"),
+            Flag("--kind", "qué se añade: mod (por defecto) · shader · resourcepack · datapack",
+                 kind="value", choices=("mod", "shader", "resourcepack", "datapack")),
         ),
         examples=(
             "modman add jei",

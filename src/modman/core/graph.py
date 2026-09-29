@@ -16,7 +16,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from .model import Mod, Side, State
+from .model import Kind, Level, Mod, Side, State, version_tuple
 
 # Un estado «gana» a otro cuando la librería la usan mods en estados distintos: si alguien la usa
 # activa, la librería tiene que estar activa.
@@ -46,6 +46,53 @@ class Problem:
     def __str__(self) -> str:
         detalle = ", ".join(f"{d} (→ {donde})" for d, donde in self.missing.items())
         return f"[{self.side.value}] {self.slug} requiere {detalle}"
+
+
+@dataclass
+class MissingRequirement:
+    """Una dependencia declarada a mano que no se cumple."""
+
+    slug: str
+    needs: str
+    kind: Kind
+    wanted_version: str
+    problem: str
+    reason: str = ""
+    level: Level = Level.REQUIRED
+
+    @property
+    def blocking(self) -> bool:
+        """Si no lo es, el pack arranca y funciona: es un aviso, no un error."""
+        return self.level.blocking
+
+    def __str__(self) -> str:
+        v = f" {self.wanted_version}" if self.wanted_version else ""
+        porque = f" — {self.reason}" if self.reason else ""
+        marca = "" if self.blocking else " [parcial]"
+        return f"{self.slug} necesita {self.kind.value} {self.needs}{v}: {self.problem}{porque}{marca}"
+
+
+@dataclass
+class PackFormatIssue:
+    """Un paquete de recursos que el juego listará bajo «Incompatible».
+
+    No impide jugar —se carga igual y casi siempre se ve bien—, pero es la explicación de la
+    mitad de los «se me ve raro una textura» y no hay forma de verlo sin abrir el juego.
+    """
+
+    slug: str
+    kind: Kind
+    declared: int
+    expected: int
+    mc_version: str
+    made_for: list = field(default_factory=list)
+
+    def __str__(self) -> str:
+        para = f" (es de {', '.join(self.made_for)})" if self.made_for else ""
+        return (
+            f"{self.slug}: pack_format {self.declared}{para} y {self.mc_version} espera "
+            f"{self.expected} → el juego lo marcará como incompatible"
+        )
 
 
 class Graph:
@@ -160,6 +207,101 @@ class Graph:
         if mios & set(scan.get("required_server_only", [])):
             return Side.SERVER if user.side is not Side.CLIENT else user.side
         return user.side
+
+    # -------------------------------------------- dependencias declaradas --
+    def check_requirements(self) -> list[MissingRequirement]:
+        """Comprueba las dependencias que ningún metadato declara.
+
+        Es lo que ningún launcher hace, y cubre las cuatro formas que tienen en la práctica:
+
+        - **versión exacta**: `euphoria_patcher` parchea *una* versión de Complementary. Si el
+          shader instalado es otro, el juego no da ningún error: el shader no se aplica y ya.
+        - **versión mínima**: un shaderpack moderno pide Iris de tal versión en adelante.
+        - **cualquiera de varios** (`any_of`): Iris **u** Oculus valen igual; se cumple con uno.
+        - **parcial** (`level`): un paquete de texturas con texturas conectadas carga sin
+          Continuity, solo que sin ellas. Sale como aviso y no como error, o dejaría de leerse.
+        """
+        fallos: list[MissingRequirement] = []
+        for slug, m in sorted(self.mods.items()):
+            if m.state is not State.ON:
+                continue
+            for req in m.requires:
+                fallo = self._check_one(slug, req)
+                if fallo is not None:
+                    fallos.append(fallo)
+        return fallos
+
+    def _check_one(self, slug: str, req) -> MissingRequirement | None:
+        """Comprueba un requisito contra el índice. `None` si se cumple con algún candidato.
+
+        Con `any_of`, el requisito se da por bueno en cuanto uno encaja; solo si **ninguno**
+        encaja se informa, y el problema que se cuenta es el del candidato que más cerca estuvo
+        —estar instalado en otra versión es más accionable que no estar—.
+        """
+        problemas: list[str] = []
+        for cand in req.candidates:
+            objetivo = self.mods.get(cand)
+            if objetivo is None:
+                problemas.append(f"{cand}: no está en el índice")
+                continue
+            if objetivo.state is not State.ON:
+                problemas.insert(0, f"{cand}: está en estado {objetivo.state.value}")
+                continue
+            instalada = f"{objetivo.filename} {objetivo.version_number}".strip()
+            if req.version:
+                # Los shaders no siguen semver y su versión suele estar solo en el nombre del
+                # archivo, así que se busca como subcadena en los dos sitios donde puede estar.
+                if req.version.lower() in instalada.lower():
+                    return None
+                problemas.insert(0, f"{cand}: instalada {objetivo.version_number or objetivo.filename}")
+                continue
+            if req.min_version:
+                tengo = version_tuple(objetivo.version_number or objetivo.filename)
+                if tengo >= version_tuple(req.min_version):
+                    return None
+                problemas.insert(0, f"{cand}: instalada {objetivo.version_number or objetivo.filename}")
+                continue
+            return None
+        return MissingRequirement(
+            slug=slug,
+            needs=" o ".join(req.candidates),
+            kind=req.kind,
+            wanted_version=req.version or (f">= {req.min_version}" if req.min_version else ""),
+            problem="; ".join(problemas) or "no está en el índice",
+            reason=req.reason,
+            level=req.level,
+        )
+
+    def check_pack_formats(self, mc_version: str) -> list[PackFormatIssue]:
+        """Paquetes de recursos y datapacks cuyo `pack_format` no es el de esta versión.
+
+        El dato sale del `pack.mcmeta`, que guarda `packscan` al escanear. Si no hay tabla para
+        la versión del juego —la tabla se actualiza a mano y siempre va por detrás— no se emite
+        veredicto: es preferible callar a marcar como incompatible algo que no lo es.
+        """
+        from . import packmeta
+
+        fuera: list[PackFormatIssue] = []
+        for slug, m in sorted(self.mods.items()):
+            if m.kind not in (Kind.RESOURCEPACK, Kind.DATAPACK) or m.state is not State.ON:
+                continue
+            meta = (m.raw.get("pack") or {})
+            if not meta.get("format"):
+                continue
+            esperado = packmeta.expected_format(mc_version, data=m.kind is Kind.DATAPACK)
+            if esperado is None or packmeta.compatible(meta, esperado):
+                continue
+            fuera.append(
+                PackFormatIssue(
+                    slug=slug,
+                    kind=m.kind,
+                    declared=meta["format"],
+                    expected=esperado,
+                    mc_version=mc_version,
+                    made_for=packmeta.versions_for(meta["format"], data=m.kind is Kind.DATAPACK),
+                )
+            )
+        return fuera
 
     # ----------------------------------------------------------- diagnóstico --
     def diagnose(self, sides: tuple[Side, ...] = (Side.SERVER, Side.CLIENT)) -> list[Problem]:

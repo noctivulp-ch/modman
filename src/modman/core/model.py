@@ -12,9 +12,50 @@ uno** (`Target.accepts`), que es justo lo que la versión anterior tenía clavad
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
+
+
+class Kind(str, Enum):
+    """Qué clase de contenido es. No todo lo que gestiona un pack es un mod.
+
+    Se añadió porque los launchers tratan shaders y paquetes de recursos como archivos sueltos:
+    no saben de versiones compatibles ni de dependencias. Y las hay —`euphoria_patcher` no
+    funciona sin la versión exacta de Complementary que espera—, así que si el índice no las
+    conoce, nadie las comprueba.
+    """
+
+    MOD = "mod"
+    SHADER = "shader"
+    RESOURCEPACK = "resourcepack"
+    DATAPACK = "datapack"
+
+    @property
+    def folder(self) -> str:
+        """Carpeta habitual dentro de la instancia, para `modman init`."""
+        return {
+            Kind.MOD: "mods",
+            Kind.SHADER: "shaderpacks",
+            Kind.RESOURCEPACK: "resourcepacks",
+            Kind.DATAPACK: "datapacks",
+        }[self]
+
+    @property
+    def modrinth_type(self) -> str:
+        """`project_type` con el que lo llama Modrinth."""
+        return {
+            Kind.MOD: "mod",
+            Kind.SHADER: "shader",
+            Kind.RESOURCEPACK: "resourcepack",
+            Kind.DATAPACK: "datapack",
+        }[self]
+
+    @property
+    def deployed_disabled_suffix(self) -> str:
+        """Un shader o un resourcepack desactivado se retira; no existe `.disabled` para ellos."""
+        return ".disabled" if self is Kind.MOD else ""
 
 
 class Side(str, Enum):
@@ -60,9 +101,98 @@ class Target:
     path: Path
     accepts: frozenset[Side]
     enabled: bool = True
+    #: Qué clases de contenido aterrizan aquí. Por omisión, mods: es lo que había antes de que
+    #: existieran los demás tipos, y así un `modman.toml` viejo sigue significando lo mismo.
+    kinds: frozenset = frozenset({Kind.MOD})
 
-    def wants(self, side: Side) -> bool:
+    def wants(self, side: Side, kind: "Kind | None" = None) -> bool:
+        if kind is not None and kind not in self.kinds:
+            return False
         return any(side.reaches(a) for a in self.accepts)
+
+
+class Level(str, Enum):
+    """Cuánto duele que la dependencia falte.
+
+    No todas rompen igual, y tratarlas igual hace inútil el informe. Un paquete de texturas con
+    texturas conectadas **funciona** sin Continuity: se ve peor, nada más. Un shader sin cargador
+    de shaders no se puede ni seleccionar. Si las dos salieran como error, se dejarían de leer las
+    dos.
+    """
+
+    REQUIRED = "required"
+    #: Funciona, pero con parte del contenido inerte (texturas conectadas, emisivas, CIT).
+    PARTIAL = "partial"
+    OPTIONAL = "optional"
+
+    @property
+    def blocking(self) -> bool:
+        return self is Level.REQUIRED
+
+
+def version_tuple(texto: str) -> tuple[int, ...]:
+    """Los números de una versión, para poder compararlas. Lo que no sea número se ignora.
+
+    Vale para `1.7.5`, `iris-1.8.8+mc1.21.1` o `r5.9.3`, que es lo que hay. No pretende ser
+    semver: solo ordenar dos cadenas del mismo proyecto, que es la única comparación que se hace.
+    """
+    return tuple(int(n) for n in re.findall(r"\d+", texto or ""))
+
+
+@dataclass(frozen=True)
+class Requirement:
+    """Una dependencia que ningún metadato declara y que hay que escribir a mano.
+
+    Existe porque los acoplamientos más molestos de un pack son los que ninguna herramienta ve.
+    Los cuatro que motivaron esto, y que el modelo tiene que saber expresar:
+
+    1. **Un mod que necesita un shader concreto.** `euphoria_patcher` no funciona sin *la versión
+       exacta* de Complementary que parchea, y eso no aparece en su `mods.toml` ni en la página
+       del shader. Se descubre con el juego abierto, cuando el shader no se aplica.
+    2. **Un shader que necesita un cargador**, y a partir de cierta versión: Iris **o** Oculus,
+       indistintamente. De ahí `any_of`: la dependencia se cumple con cualquiera de ellos, y un
+       modelo de un solo `slug` obligaría a mentir eligiendo uno.
+    3. **Un paquete de texturas que necesita un mod** para que parte de su contenido haga algo:
+       Continuity o CTM para las texturas conectadas, ETF/EMF para las emisivas. Sin él **carga
+       igual**; por eso `level = partial` y no un error.
+    4. Y el caso corriente de un mod que necesita otro sin declararlo.
+
+    `version` es texto libre y se compara como subcadena contra el nombre del archivo y la versión
+    del índice: los shaders no siguen semver y su versión suele vivir solo en el nombre
+    (`ComplementaryReimagined_r5.6.1.zip`). `min_version` es lo contrario: compara números y se
+    cumple con esa versión o cualquiera posterior, que es como se expresa «Iris 1.7 o superior».
+    """
+
+    slug: str
+    kind: "Kind" = None  # type: ignore[assignment]
+    version: str = ""
+    reason: str = ""
+    #: Alternativas que cumplen lo mismo. `slug` es la preferida; cualquiera de estas sirve.
+    any_of: tuple = ()
+    level: "Level" = None  # type: ignore[assignment]
+    #: Versión mínima, comparada por números. Excluyente con `version`, que es exacta.
+    min_version: str = ""
+
+    def __post_init__(self):
+        if self.kind is None:
+            object.__setattr__(self, "kind", Kind.MOD)
+        if self.level is None:
+            object.__setattr__(self, "level", Level.REQUIRED)
+        object.__setattr__(self, "any_of", tuple(self.any_of))
+
+    @property
+    def candidates(self) -> tuple:
+        """Todos los slugs que satisfacen la dependencia, la preferida primero."""
+        return (self.slug, *(a for a in self.any_of if a != self.slug))
+
+    @property
+    def label(self) -> str:
+        alt = " o ".join(self.candidates)
+        if self.version:
+            return f"{alt} {self.version}"
+        if self.min_version:
+            return f"{alt} >= {self.min_version}"
+        return alt
 
 
 @dataclass
@@ -70,10 +200,17 @@ class Scan:
     """Lo que se dedujo de mirar dentro del jar. Sugerencia, nunca decisión."""
 
     modids: list[str] = field(default_factory=list)
+    #: Los que el jar declara como suyos, sin los de sus jars internos. Vacío en índices
+    #: anteriores a que existiera la distinción; entonces vale `modids`.
+    own: list[str] = field(default_factory=list)
     requires: list[str] = field(default_factory=list)
     optional: list[str] = field(default_factory=list)
     suggested_side: Side | None = None
     signals: list[str] = field(default_factory=list)
+
+    @property
+    def own_modids(self) -> list[str]:
+        return self.own or self.modids
 
 
 @dataclass
@@ -95,6 +232,7 @@ class Mod:
 
     slug: str
     name: str = ""
+    kind: Kind = Kind.MOD
     side: Side = Side.BOTH
     state: State = State.ON
     group: str = ""
@@ -109,6 +247,8 @@ class Mod:
     sha512: str = ""
     patched: str = ""
     scan: Scan = field(default_factory=Scan)
+    #: Dependencias declaradas a mano, las que no salen de ningún metadato.
+    requires: tuple = ()
     raw: dict = field(default_factory=dict)
 
     @property
@@ -122,11 +262,19 @@ class Mod:
 
     @property
     def deployed_name(self) -> str:
-        """Cómo se llama el archivo en el destino: activo o `.disabled`."""
+        """Cómo se llama el archivo en el destino: activo o `.disabled`.
+
+        Solo los mods admiten `.disabled`: el cargador los ignora por la extensión. Un shader o un
+        paquete de recursos desactivado simplemente no se copia, porque ahí el sufijo no significa
+        nada y dejaría basura en la carpeta que el juego lista.
+        """
         art = self.artifact
         if not art:
             return ""
-        return art if self.state.deployed_enabled else art + ".disabled"
+        if self.state.deployed_enabled:
+            return art
+        sufijo = self.kind.deployed_disabled_suffix
+        return art + sufijo if sufijo else ""
 
 
 class Action(str, Enum):

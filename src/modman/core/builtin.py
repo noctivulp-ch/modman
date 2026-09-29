@@ -136,6 +136,112 @@ class DeclaredSideAdvisor:
         return None
 
 
+# ------------------------------------------------- shaders y paquetes de recursos --
+class PackAnalyzer:
+    """Mira dentro de un `.zip` que no es un mod: shaderpack o paquete de recursos.
+
+    Es el analizador que responde a lo que el gestor de un launcher no sabe. De un `.zip` suelto
+    en `resourcepacks/` o `shaderpacks/` se puede saber bastante más de lo que enseña su nombre:
+
+    - **`pack.mcmeta`** dice para qué versión del juego se hizo. Con eso se sabe, *antes* de
+      abrir el juego, si va a aparecer bajo «Incompatible» (ver `packmeta`).
+    - **Una carpeta `shaders/`** en la raíz lo delata como shaderpack, y entonces necesita un
+      cargador —Iris u Oculus— que rara vez está escrito en ninguna parte.
+    - **Carpetas de OptiFine** (`optifine/ctm`, `emissive.properties`, `optifine/cit`,
+      `optifine/random`) marcan contenido que en Fabric/NeoForge **no hace nada** sin el mod que
+      lo reimplementa: Continuity o CTM para las texturas conectadas, ETF/EMF para emisivas y
+      entidades, CIT Resewn para los ítems. El paquete carga igual y se ve a medias, que es el
+      fallo más difícil de atribuir de los tres.
+
+    No decide nada: deja los hechos y `suggested_requirements` propone las dependencias.
+    """
+
+    name = "packscan"
+
+    #: `marca en el zip → (slugs que lo implementan, qué contenido queda inerte sin ellos)`.
+    OPTIFINE = (
+        (("/optifine/ctm/", "/optifine/ctm.properties", "/mcpatcher/ctm/"),
+         ("continuity", "ctm"), "texturas conectadas"),
+        (("/optifine/emissive.properties", "_e.png"),
+         ("entitytexturefeatures", "entity_texture_features"), "texturas emisivas"),
+        (("/optifine/cit/", "/mcpatcher/cit/"), ("cit-resewn",), "texturas de ítem (CIT)"),
+        (("/optifine/random/", "/optifine/mob/"), ("entitytexturefeatures",), "entidades aleatorias"),
+    )
+
+    def analyze(self, jar: Path) -> dict[str, Any]:
+        import zipfile
+
+        from . import packmeta
+
+        datos: dict[str, Any] = {}
+        meta = packmeta.read_pack_meta(jar)
+        if meta:
+            datos["pack"] = meta
+        try:
+            with zipfile.ZipFile(jar) as z:
+                nombres = z.namelist()
+        except Exception:
+            return datos
+        raiz = {n.split("/", 1)[0] for n in nombres if "/" in n}
+        if "shaders" in raiz or any(n.startswith("shaders/") for n in nombres):
+            datos["shaderpack"] = True
+            # Iris lee `shaders.properties`; una marca `iris.` dentro es un shader que ya usa
+            # extensiones suyas y no va a funcionar en un OptiFine puro.
+            props = next((n for n in nombres if n.endswith("shaders/shaders.properties")), None)
+            if props:
+                try:
+                    with zipfile.ZipFile(jar) as z:
+                        texto = z.read(props).decode("utf-8", "replace")
+                    if "iris." in texto:
+                        datos["iris_only"] = True
+                except Exception:
+                    pass
+        elif any(n.startswith("assets/") for n in nombres):
+            datos["resourcepack"] = True
+        marcas: list[str] = []
+        unido = "\n".join("/" + n for n in nombres)
+        for patrones, _slugs, etiqueta in self.OPTIFINE:
+            if any(p in unido for p in patrones):
+                marcas.append(etiqueta)
+        if marcas:
+            datos["optifine_features"] = marcas
+        return datos
+
+
+def suggested_requirements(facts_pack: dict[str, Any]) -> list:
+    """De lo observado en un `.zip` a las dependencias que habría que declarar.
+
+    Son propuestas, como las opiniones de lado: se enseñan con su motivo y las escribe quien
+    decide. La versión mínima de Iris no se inventa —depende de la versión del juego— y por eso
+    se deja vacía en lugar de poner un número que envejezca mal.
+    """
+    from .model import Kind, Level, Requirement
+
+    salida: list = []
+    if facts_pack.get("shaderpack"):
+        salida.append(
+            Requirement(
+                slug="iris",
+                any_of=("iris", "oculus"),
+                kind=Kind.MOD,
+                reason="un shaderpack necesita un cargador de shaders; en NeoForge es Oculus",
+            )
+        )
+    etiquetas = facts_pack.get("optifine_features") or []
+    for patrones, slugs, etiqueta in PackAnalyzer.OPTIFINE:
+        if etiqueta in etiquetas:
+            salida.append(
+                Requirement(
+                    slug=slugs[0],
+                    any_of=tuple(slugs),
+                    kind=Kind.MOD,
+                    level=Level.PARTIAL,
+                    reason=f"lleva {etiqueta} de OptiFine: sin el mod que las reimplementa, carga sin ellas",
+                )
+            )
+    return salida
+
+
 def default_extensions(*, deep_scan: bool = True):
     """Las extensiones de fábrica ya registradas, más lo que aporten otros paquetes.
 
@@ -146,6 +252,7 @@ def default_extensions(*, deep_scan: bool = True):
 
     ext = Extensions()
     ext.add_analyzer(JarscanAnalyzer(deep=deep_scan))
+    ext.add_analyzer(PackAnalyzer())
     for advisor in (ContentAdvisor(), PhysicsUIAdvisor(), NetworkChannelAdvisor(), DeclaredSideAdvisor()):
         ext.add_advisor(advisor)
     ext.load_entry_points()

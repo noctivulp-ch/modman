@@ -14,7 +14,7 @@ import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from .model import Side
+from .model import Kind, Side
 
 CONFIG_NAME = "modman.toml"
 
@@ -129,6 +129,14 @@ def load(path: Path | None = None, start: Path | None = None) -> Config:
         vistos.add(name)
         if not t.get("path"):
             raise ConfigError(f"el destino {name!r} de {cfg_path} no tiene `path`")
+        kinds_raw = t.get("kinds") or ["mod"]
+        try:
+            kinds = frozenset(Kind(k) for k in kinds_raw)
+        except ValueError as e:
+            validos = ", ".join(k.value for k in Kind)
+            raise ConfigError(
+                f"el destino {name!r} declara un tipo de contenido que no existe ({e}). Válidos: {validos}"
+            ) from e
         accepts_raw = t.get("accepts") or ["both"]
         try:
             accepts = frozenset(Side(a) for a in accepts_raw)
@@ -146,6 +154,7 @@ def load(path: Path | None = None, start: Path | None = None) -> Config:
                 path=resolve(t["path"]),
                 accepts=accepts,
                 enabled=bool(t.get("enabled", True)),
+                kinds=kinds,
             )
         )
 
@@ -182,6 +191,15 @@ loader = "{loader}"     # neoforge · forge · fabric · quilt
 name = "{t1_name}"
 path = "{t1_path}"
 accepts = ["{t1_accepts}"]   # qué lados aterrizan aquí: server · client · both
+kinds = ["mod"]         # qué contenido: mod · shader · resourcepack · datapack
+
+# Shaders y paquetes de recursos son destinos como cualquier otro. El launcher no
+# sabe de sus versiones ni de sus dependencias; el índice sí.
+# [[targets]]
+# name = "shaders"
+# path = "~/.local/share/PrismLauncher/instances/MiPack/minecraft/shaderpacks"
+# accepts = ["client"]
+# kinds = ["shader"]
 
 # [[targets]]
 # name = "cliente"

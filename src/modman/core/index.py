@@ -15,7 +15,7 @@ import json
 import tomllib
 from pathlib import Path
 
-from .model import Mod, Scan, Side, State
+from .model import Kind, Level, Mod, Requirement, Scan, Side, State
 
 
 class IndexError_(Exception):
@@ -33,18 +33,33 @@ def _toml_value(v) -> str:
     return json.dumps(str(v), ensure_ascii=False)
 
 
+def _dump_array_of_tables(key: str, filas: list) -> list[str]:
+    """`[[key]]` repetido, que es como TOML expresa una lista de tablas."""
+    out: list[str] = []
+    for fila in filas:
+        out += ["", f"[[{key}]]"] + [f"{k} = {_toml_value(v)}" for k, v in fila.items() if v]
+    return out
+
+
 def dumps(d: dict) -> str:
     """Vuelca un dict a TOML: claves sueltas primero, tablas después.
 
     Mantiene el orden de inserción, que es lo que hace que un `git diff` del índice se lea: si las
     claves bailaran en cada guardado, cada cambio de una nota parecería una reescritura entera.
     """
-    plain, tables = [], []
+    plain, tables, arrays = [], [], []
     for k, v in d.items():
-        (tables if isinstance(v, dict) else plain).append((k, v))
+        if isinstance(v, list) and v and all(isinstance(x, dict) for x in v):
+            arrays.append((k, v))
+        elif isinstance(v, dict):
+            tables.append((k, v))
+        else:
+            plain.append((k, v))
     lines = [f"{k} = {_toml_value(v)}" for k, v in plain if v is not None]
     for k, v in tables:
         lines += ["", f"[{k}]"] + [f"{kk} = {_toml_value(vv)}" for kk, vv in v.items() if vv is not None]
+    for k, v in arrays:
+        lines += _dump_array_of_tables(k, v)
     return "\n".join(lines) + "\n"
 
 
@@ -69,6 +84,7 @@ def to_mod(raw: dict, slug: str) -> Mod:
     return Mod(
         slug=raw.get("slug", slug),
         name=raw.get("name", ""),
+        kind=Kind(raw["kind"]) if raw.get("kind") in {k.value for k in Kind} else Kind.MOD,
         side=side_of(raw.get("side", ""), Side.BOTH),
         state=State(raw["state"]) if raw.get("state") in {s.value for s in State} else State.ON,
         group=raw.get("group", "") or "",
@@ -84,11 +100,25 @@ def to_mod(raw: dict, slug: str) -> Mod:
         patched=patched.get("filename", ""),
         scan=Scan(
             modids=list(scan_raw.get("modids", [])),
+            own=list(scan_raw.get("own", [])),
             requires=list(scan_raw.get("required", [])),
             optional=list(scan_raw.get("optional", [])),
             # El escaneo marca con "?" que es una sugerencia: no se convierte en decisión sola.
             suggested_side=side_of(scan_raw.get("side", ""), None) if scan_raw.get("side") else None,
             signals=list(scan_raw.get("flags", [])),
+        ),
+        requires=tuple(
+            Requirement(
+                slug=r.get("slug", ""),
+                kind=Kind(r["kind"]) if r.get("kind") in {k.value for k in Kind} else Kind.MOD,
+                version=str(r.get("version", "")),
+                reason=r.get("reason", ""),
+                any_of=tuple(r.get("any_of", ())),
+                level=Level(r["level"]) if r.get("level") in {x.value for x in Level} else Level.REQUIRED,
+                min_version=str(r.get("min_version", "")),
+            )
+            for r in raw.get("requires", [])
+            if r.get("slug")
         ),
         raw=raw,
     )
@@ -114,6 +144,9 @@ def to_raw(mod: Mod) -> dict:
     raw["slug"] = mod.slug
     if mod.project_id:
         raw["project_id"] = mod.project_id
+    # Solo se escribe cuando no es un mod: así los índices que ya existen no cambian ni una línea.
+    if mod.kind is not Kind.MOD:
+        raw["kind"] = mod.kind.value
     raw["side"] = mod.side.value
     raw["state"] = mod.state.value
     raw["group"] = mod.group
@@ -138,10 +171,21 @@ def to_raw(mod: Mod) -> dict:
         "scan",
         {
             "modids": list(mod.scan.modids),
+            "own": list(mod.scan.own),
             "required": list(mod.scan.requires),
             "optional": list(mod.scan.optional),
         },
     )
+    if mod.requires:
+        # `level` solo se escribe cuando no es el corriente, para que la línea habitual quede corta.
+        raw["requires"] = [
+            {k: v for k, v in
+             {"slug": r.slug, "kind": r.kind.value, "version": r.version,
+              "min_version": r.min_version, "any_of": list(r.any_of),
+              "level": r.level.value if r.level is not Level.REQUIRED else "",
+              "reason": r.reason}.items() if v}
+            for r in mod.requires
+        ]
     actualizar("version", {"id": mod.version_id, "number": mod.version_number})
     actualizar("download", {"filename": mod.filename, "url": mod.url, "sha512": mod.sha512})
     actualizar("patched", {"filename": mod.patched})

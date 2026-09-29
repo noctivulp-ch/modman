@@ -564,6 +564,62 @@ reversibles y van en git con el resto de la metadata del pack.
 
 ---
 
+## Shaders y paquetes de texturas: el fallo que no sale en el log
+
+Un pack no es solo `mods/`, y esta parte **no avisa cuando se rompe**. El juego arranca, no hay
+error de carga, no hay crash: lo que se rompió se ve (o no se ve) jugando. Por eso hay que
+comprobarlo a propósito y no esperar a que salte.
+
+Los cuatro acoplamientos reales, todos vistos en packs de verdad:
+
+1. **Un mod que necesita una versión exacta de un shaderpack.** `EuphoriaPatcher` parchea *una*
+   versión concreta de Complementary. Actualizar el mod y no el shader deja esto en el log, y es
+   lo único que lo dice:
+
+   ```
+   EuphoriaPatcher: === SHADER NOT FOUND ===
+   EuphoriaPatcher: Required: ComplementaryShaders r5.9.3
+   EuphoriaPatcher: Found: ComplementaryUnbound_r5.6.1.zip
+   ```
+
+   Pasó al actualizar el pack de HyperDragons (2026-09-28): subí el patcher a `1.10.5-r5.9.3` y
+   dejé los shaders en `r5.6.1`. **Un mod que depende de un shader es parte de su familia**: se
+   actualizan juntos, como cualquier otra familia (ver «Actualizar: por familias»).
+
+2. **Un shaderpack necesita un cargador de shaders**: Iris u Oculus, y a partir de cierta
+   versión. Sin él el pack está en la carpeta y no aparece seleccionable, que se lee como «el
+   shader no funciona».
+
+3. **Un paquete de texturas necesita un mod para parte de su contenido.** Las texturas
+   conectadas necesitan Continuity o CTM, las emisivas ETF/EMF, las de ítem CIT Resewn. Sin
+   ellos el paquete **carga igual** y se ve a medias: es el fallo más difícil de atribuir de los
+   tres, porque nada indica que falte nada.
+
+4. **`pack_format` de otra versión.** Cada versión del juego espera un número en el
+   `pack.mcmeta`; si no coincide, Minecraft lo lista bajo **Incompatible** y lo carga igual.
+   Arrastrar un paquete de 1.20.1 a un pack de 1.21.1 funciona… hasta que algo se ve mal.
+
+### Cómo se comprueba
+
+`modman` los modela: los shaders y los paquetes de texturas son un `kind` con su destino, y las
+dependencias se declaran a mano porque no están en ningún metadato.
+
+```bash
+modman requires euphoria-patches --add complementary-reimagined --kind shader \
+        --version r5.9.3 --reason "parchea esa versión exacta"
+modman requires comp-reimagined --add iris --or oculus --min-version 1.7
+modman requires faithful --add continuity --or ctm --level partial
+modman requires <slug> --suggest     # mira dentro del zip y propone
+modman doctor                        # comprueba las declaradas + los pack_format
+```
+
+Al terminar una actualización, **`modman doctor` y una mirada al log buscando el nombre de cada
+mod de shaders** (`grep -i euphoria`, `grep -i iris`) antes de dar el pack por bueno. Un
+`SHADER NOT FOUND` no cuenta como ERROR de carga de mods y se cuela por debajo de todos los
+criterios del apartado anterior.
+
+---
+
 ## Verificación estándar (criterio de "funciona")
 
 1. **Boot a título:** lanzar `run-test.sh`, monitorear con until-loop sobre

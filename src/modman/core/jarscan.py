@@ -38,7 +38,11 @@ def parse_toml_bytes(data: bytes):
 
 
 def scan_jar(path: Path, deep: bool = True) -> dict:
-    info = {"jar": path.name, "provides": set(), "required": {}, "optional": {}, "flags": [], "mixin_configs": 0,
+    # `provides` incluye los modids de los jars internos (jar-in-jar); `own` solo los que el
+    # jar declara como propios. La diferencia importa: dos mods pueden embeber la misma librería
+    # sin chocar —NeoForge se queda con la versión más alta—, y confundirlos hacía que modman se
+    # negara a desplegar Iris porque Kiwi trae dentro el mismo `fabric_api_base`.
+    info = {"jar": path.name, "provides": set(), "own": set(), "required": {}, "optional": {}, "flags": [], "mixin_configs": 0,
             "declared_client_only": False, "display_test": None, "data_dirs": set(), "asset_dirs": set(),
             "classes": 0, "client_ref_outside": 0, "client_ref_classes": [], "required_side": {}, "net_channel": "", "content": set(), "ui_physics": set()}
     try:
@@ -55,8 +59,12 @@ def scan_jar(path: Path, deep: bool = True) -> dict:
             mid = mod.get("modId")
             if mid:
                 info["provides"].add(mid)
+                if outer:
+                    info["own"].add(mid)
             for p in (mod.get("provides") or []):
                 info["provides"].add(p)
+                if outer:
+                    info["own"].add(p)
             if outer:
                 if mod.get("clientSideOnly") is True or toml.get("clientSideOnly") is True:
                     info["declared_client_only"] = True
@@ -93,6 +101,7 @@ def scan_jar(path: Path, deep: bool = True) -> dict:
             fj = json.loads(z.read("fabric.mod.json"))
             if fj.get("id"):
                 info["provides"].add(fj["id"])
+                info["own"].add(fj["id"])
         except Exception:
             pass
     for svc in ("META-INF/services/cpw.mods.modlauncher.api.ITransformationService",

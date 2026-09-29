@@ -253,3 +253,189 @@ def test_gana_el_asesor_con_mas_confianza():
     ext.add_advisor(Debil())
     ext.add_advisor(Fuerte())
     assert ext.consensus(Mod(slug="m"), Facts(jar=Path("x"))).side is Side.BOTH
+
+
+# ------------------------------------------------------- tipos de contenido --
+def test_un_shader_va_a_su_destino_y_no_a_la_carpeta_de_mods(tmp_path):
+    """El launcher no distingue; el índice sí. Un shader en mods/ no lo carga nadie."""
+    from modman.core.model import Kind
+
+    escribir_config(tmp_path, """
+[pack]
+dir = "pack"
+[[targets]]
+name = "mods"
+path = "mods"
+accepts = ["client"]
+kinds = ["mod"]
+[[targets]]
+name = "shaders"
+path = "shaderpacks"
+accepts = ["client"]
+kinds = ["shader"]
+""")
+    (tmp_path / "mods").mkdir()
+    (tmp_path / "shaderpacks").mkdir()
+    cfg = config.load(start=tmp_path)
+    idx = Index(cfg.index_dir)
+    idx.save(Mod(slug="comp", kind=Kind.SHADER, side=Side.CLIENT, filename="Complementary.zip"))
+    idx.save(Mod(slug="jei", kind=Kind.MOD, side=Side.CLIENT, filename="jei.jar"))
+    idx.reload()
+    plan = Deployer(cfg, idx).plan()
+    destinos = {s.slug: s.target for s in plan.steps if s.action is Action.COPY}
+    assert destinos == {"comp": "shaders", "jei": "mods"}
+
+
+def test_un_shader_desactivado_no_se_despliega_con_disabled(tmp_path):
+    """`.disabled` solo lo entiende el cargador de mods; en shaderpacks sería basura visible."""
+    from modman.core.model import Kind
+
+    m = Mod(slug="c", kind=Kind.SHADER, state=State.OFF, filename="C.zip")
+    assert m.deployed_name == ""
+    assert Mod(slug="j", kind=Kind.MOD, state=State.OFF, filename="j.jar").deployed_name == "j.jar.disabled"
+
+
+def test_los_zips_sueltos_de_un_shaderpack_se_detectan_como_no_gestionados(tmp_path):
+    from modman.core.model import Kind
+
+    escribir_config(tmp_path, """
+[pack]
+dir = "pack"
+[[targets]]
+name = "shaders"
+path = "shaderpacks"
+accepts = ["client"]
+kinds = ["shader"]
+""")
+    (tmp_path / "shaderpacks").mkdir()
+    (tmp_path / "shaderpacks" / "OtroShader.zip").write_bytes(b"x")
+    cfg = config.load(start=tmp_path)
+    plan = Deployer(cfg, Index(cfg.index_dir)).plan()
+    assert plan.untracked["shaders"] == ["OtroShader.zip"]
+
+
+def test_un_toml_sin_kind_sigue_siendo_un_mod(tmp_path):
+    """Compatibilidad: los índices que ya existen no llevan `kind` y no deben cambiar."""
+    from modman.core.model import Kind
+
+    vuelta = to_raw(to_mod({"slug": "x", "side": "both", "download": {"filename": "x.jar"}}, "x"))
+    assert "kind" not in vuelta
+    assert to_mod({"slug": "x"}, "x").kind is Kind.MOD
+
+
+# ---------------------------------------------------------------------------------------------
+# Dependencias que ningún metadato declara. Los cuatro casos son reales y los cuatro fallan en
+# silencio: el juego arranca y lo que no funciona se descubre mirando, que es el peor momento.
+# ---------------------------------------------------------------------------------------------
+def _grafo(*mods):
+    from modman.core.graph import Graph
+
+    return Graph({m.slug: m for m in mods})
+
+
+def test_un_mod_que_pide_una_version_exacta_de_shader_detecta_la_equivocada():
+    """El caso EuphoriaPatcher: parchea una versión concreta de Complementary.
+
+    Si el shader instalado es otro, no hay error, ni crash, ni línea en rojo: el shader
+    simplemente no se aplica. Pasó de verdad al actualizar el patcher y no el shaderpack.
+    """
+    from modman.core.model import Kind, Requirement
+
+    shader = Mod(slug="comp", kind=Kind.SHADER, filename="ComplementaryReimagined_r5.6.1.zip")
+    patcher = Mod(
+        slug="euphoria", version_number="1.10.5-r5.9.3",
+        requires=(Requirement(slug="comp", kind=Kind.SHADER, version="r5.9.3"),),
+    )
+    fallos = _grafo(shader, patcher).check_requirements()
+    assert len(fallos) == 1 and fallos[0].blocking
+    assert "r5.6.1" in fallos[0].problem
+
+    shader.filename = "ComplementaryReimagined_r5.9.3.zip"
+    assert _grafo(shader, patcher).check_requirements() == []
+
+
+def test_un_cargador_de_shaders_se_cumple_con_cualquiera_de_los_dos():
+    """Iris **u** Oculus: con `any_of`, uno basta y no hay que mentir eligiendo uno."""
+    from modman.core.model import Kind, Requirement
+
+    pack = Mod(
+        slug="comp", kind=Kind.SHADER,
+        requires=(Requirement(slug="iris", any_of=("iris", "oculus"), min_version="1.7"),),
+    )
+    assert _grafo(pack).check_requirements()[0].needs == "iris o oculus"
+    oculus = Mod(slug="oculus", version_number="1.8.0")
+    assert _grafo(pack, oculus).check_requirements() == []
+
+
+def test_la_version_minima_compara_numeros_y_no_subcadenas():
+    """`1.7` no puede cumplirse con `1.10` por parecerse: hay que comparar números."""
+    from modman.core.model import Requirement, version_tuple
+
+    assert version_tuple("iris-1.10.0+mc1.21.1") > version_tuple("1.7")
+    pack = Mod(slug="comp", requires=(Requirement(slug="iris", min_version="1.7"),))
+    assert _grafo(pack, Mod(slug="iris", version_number="1.6.9")).check_requirements()
+    assert _grafo(pack, Mod(slug="iris", version_number="1.10.0")).check_requirements() == []
+
+
+def test_una_dependencia_parcial_avisa_pero_no_bloquea():
+    """Faithful sin Continuity carga y se ve; solo pierde las texturas conectadas.
+
+    Si esto saliera como error, `doctor` fallaría en CI por algo cosmético y se dejaría de mirar.
+    """
+    from modman.core.model import Kind, Level, Requirement
+
+    pack = Mod(
+        slug="faithful", kind=Kind.RESOURCEPACK,
+        requires=(Requirement(slug="continuity", any_of=("continuity", "ctm"), level=Level.PARTIAL),),
+    )
+    fallo = _grafo(pack).check_requirements()[0]
+    assert not fallo.blocking and "[parcial]" in str(fallo)
+
+
+def test_un_pack_format_de_otra_version_se_detecta_sin_abrir_el_juego():
+    """Lo que el gestor del launcher no mira: el número de `pack.mcmeta` contra la versión del pack."""
+    from modman.core.model import Kind
+
+    pack = Mod(slug="faithful", kind=Kind.RESOURCEPACK, raw={"pack": {"format": 15}})
+    (issue,) = _grafo(pack).check_pack_formats("1.21.1")
+    assert issue.declared == 15 and issue.expected == 34 and "1.20.1" in issue.made_for
+    # `supported_formats` declara un rango y hace compatible al paquete dentro de él.
+    pack.raw["pack"]["supported"] = [15, 34]
+    assert _grafo(pack).check_pack_formats("1.21.1") == []
+    # Y de una versión que no está en la tabla no se opina, en vez de inventar un veredicto.
+    del pack.raw["pack"]["supported"]
+    assert _grafo(pack).check_pack_formats("1.99") == []
+
+
+def test_las_dependencias_declaradas_sobreviven_al_guardado():
+    from modman.core.model import Kind, Level, Requirement
+
+    mod = Mod(slug="f", kind=Kind.RESOURCEPACK, requires=(
+        Requirement(slug="continuity", any_of=("continuity", "ctm"), level=Level.PARTIAL,
+                    min_version="3.0", reason="CTM"),
+    ))
+    vuelta = to_mod(to_raw(mod), "f").requires[0]
+    assert vuelta.candidates == ("continuity", "ctm")
+    assert vuelta.level is Level.PARTIAL and vuelta.min_version == "3.0"
+
+
+def test_dos_mods_que_embeben_la_misma_libreria_no_chocan(tmp_path):
+    """El choque de modid se mide entre los modids **propios**, no los de los jars internos.
+
+    Encontrado desplegando de verdad: modman se negaba a poner Iris porque Kiwi y la Fabric API
+    traen dentro el mismo `fabric_api_base`. Embeber la misma librería es normal —NeoForge se
+    queda con la versión más alta— y bloquear por eso deja un pack sin desplegar por nada.
+    """
+    from modman.core.model import Scan
+
+    cfg, idx = _pack(tmp_path, Side.CLIENT, State.ON)
+    mod = idx.get("m")
+    mod.scan = Scan(modids=["m", "fabric_api_base"], own=["m"])
+    idx.save(mod)
+    ajeno = cfg.target("cli").path / "kiwi.jar"
+    ajeno.parent.mkdir(parents=True, exist_ok=True)
+    ajeno.write_bytes(b"x")
+    plan = Deployer(cfg, Index(cfg.index_dir), scanner=lambda p: ["kiwi", "fabric_api_base"]).plan()
+    assert plan.conflicts == []
+    plan2 = Deployer(cfg, Index(cfg.index_dir), scanner=lambda p: ["m"]).plan()
+    assert plan2.conflicts and "m" in plan2.conflicts[0]

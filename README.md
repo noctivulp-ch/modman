@@ -135,6 +135,70 @@ desarrollo, algo copiado a mano—. Se informan y **nunca se tocan**. Si uno dec
 que un mod del índice, ese mod no se despliega y se avisa: dos jars con el mismo modid tumban el
 juego.
 
+## Shaders y paquetes de texturas
+
+Un pack no es solo `mods/`. Los gestores de los launchers tratan `shaderpacks/` y
+`resourcepacks/` como carpetas de archivos sueltos: no saben qué versión del juego espera cada
+uno ni de qué dependen. Aquí son un tipo más (`kind`), con su propio destino:
+
+```toml
+[[targets]]
+name = "shaders"
+path = "minecraft/shaderpacks"
+accepts = ["client"]
+kinds = ["shader"]          # sin esto, un destino solo acepta mods
+```
+
+```bash
+modman add complementary-reimagined --kind shader --version r5.9.3
+```
+
+Dos diferencias con un mod, y las dos vienen de cómo las lee el juego: un shaderpack o un
+paquete de texturas **desactivado no se copia** —`.disabled` solo lo entiende el cargador de
+mods; en `shaderpacks/` sería un archivo raro a la vista—, y al buscar en el destino se miran
+`*.zip` y no `*.jar`.
+
+### Dependencias que nadie declara
+
+El motivo real de todo esto. Las dependencias entre mods, shaders y texturas **no están en
+ningún metadato**, así que ninguna herramienta las comprueba y todas fallan en silencio: el
+juego arranca, y lo que no funciona se descubre mirando. Las cuatro formas que tienen:
+
+| Caso | Cómo se declara |
+|---|---|
+| Un mod necesita **una versión exacta** de un shader — EuphoriaPatcher parchea *ese* Complementary | `--kind shader --version r5.9.3` |
+| Un shaderpack necesita **un cargador**, Iris **u** Oculus, de cierta versión en adelante | `--add iris --or oculus --min-version 1.7` |
+| Un paquete de texturas necesita un mod para que **parte** de su contenido haga algo (Continuity o CTM para las conectadas, ETF/EMF para las emisivas, CIT Resewn para los ítems) | `--add continuity --or ctm --level partial` |
+| Un mod necesita otro y no lo declara | `--add otromod` |
+
+```bash
+modman requires euphoria-patches --add complementary-reimagined --kind shader \
+        --version r5.9.3 --reason "parchea esa versión exacta; con otra no aplica nada"
+modman requires                       # ver todas las declaradas
+modman requires faithful --suggest    # mirar dentro del zip y proponer
+modman doctor                         # comprobarlas
+```
+
+`--level partial` existe porque no todas rompen igual: Faithful sin Continuity **carga y se
+ve**, solo pierde las texturas conectadas. Sale como aviso y no cuenta para el código de salida,
+o `doctor` fallaría en CI por algo cosmético y se dejaría de mirar.
+
+### `pack_format`: el «incompatible» del menú
+
+Cada versión del juego espera un número de formato en el `pack.mcmeta` del paquete. Cuando no
+coincide, Minecraft lo lista bajo **Incompatible** y lo carga igual —casi siempre bien—. Eso
+convierte «se me ve rara una textura» en algo imposible de atribuir. `modman scan` lee ese
+número y `doctor` lo compara con la versión del pack:
+
+```
+faithful: pack_format 15 (es de 1.20, 1.20.1) y 1.21.1 espera 34
+          → el juego lo marcará como incompatible
+```
+
+La tabla de formatos vive en `core/packmeta.py` y se actualiza a mano con cada versión de
+Minecraft. Lo que no esté en ella **no se juzga**: un veredicto inventado es peor que no
+comprobar nada.
+
 ## Arquitectura
 
 Tres capas, y las dos de interfaz son intercambiables:
@@ -260,5 +324,5 @@ se genera de la especificación real.
 
 ## Estado
 
-Núcleo, CLI y TUI funcionando, con los 19 comandos del original. Verificado contra un pack real de
-191 mods. 52 tests. Faltan la documentación en `docs/` y migrar el repo de origen. Ver `TODO.md`.
+Núcleo, CLI y TUI funcionando, con los 19 comandos del original más `requires`. Verificado contra
+un pack real de 191 mods y contra uno de 340 con shaders. 66 tests. Faltan la documentación en `docs/` y migrar el repo de origen. Ver `TODO.md`.
