@@ -99,6 +99,30 @@ entrar hasta haber devuelto los mods que faltaban. Ojo: errores de recetas o de 
 mencionan items de mods ausentes **no** son esto —son datapack, se arreglan solos al devolver el
 mod— y confundirlos lleva a restaurar una copia sin necesidad.
 
+### Y no mates el juego con un mundo cargado
+
+Una vez dentro de un mundo, **no lo cierres matando el proceso**. Sal desde el juego (Esc → Save
+and Quit) o, si tienes que hacerlo desde fuera, manda SIGTERM y **espera a ver el guardado en el
+log** antes de dar por terminado:
+
+```bash
+grep -E 'Saving chunks for level|All chunks are saved' logs/latest.log
+```
+
+Pasó durante una reparación real: se mató el proceso mientras JEI terminaba de construir su índice,
+justo después de que el jugador entrara. El log se quedó a medias, sin cierre limpio y sin crash
+report, y **parecía un crash del pack cuando era la parada**. Perseguir ese fantasma cuesta una
+hora. El mundo sobrevivió —`level.dat` sano, las 17 regiones tocadas sanas— pero fue suerte, no
+diseño.
+
+Cómo distinguir una cosa de la otra, que es lo que ahorra el tiempo:
+
+| Señal | Qué fue |
+|---|---|
+| Hay crash report nuevo en `crash-reports/` | Crash de verdad |
+| El log acaba en `Stopping!` / `Exiting` | Cierre limpio |
+| El log acaba a media frase, sin crash report | **Lo mataron desde fuera** |
+
 ### Qué versionar y qué no
 
 | Versionar | Ignorar |
