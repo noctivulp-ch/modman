@@ -1,23 +1,30 @@
 ---
 name: mod-ops
 description: >
-  Metodología completa para gestionar mods de un modpack NeoForge en estado dev:
-  actualizar mods, integrar/activar mods nuevos, y rescatar mods problemáticos
-  (fix propio por mixin, update, o documentar como unfixed para bug report).
-  Incluye el montaje del entorno de gestión (modman como herramienta externa + logs)
-  en un modpack nuevo, y campañas de activación por olas hacia el "modpack full"
-  (mapeo de dependencias y perfil modpack-debug). Usar siempre que el usuario
-  pida: actualizar el modpack, "integra/activa este mod", "arregla los mods problemáticos",
-  "revisa updates", "activa el modpack full", "ejecuta la ola N", "monta la gestión de
-  mods en X", o cualquier campaña sobre lib/mods.
-  Triggers: /mod-ops, "campaña de mods", "mod problemático", "update de mods", "ola de activación".
+  Metodología para gestionar y reparar un modpack: actualizar mods, integrar o activar mods
+  nuevos, rescatar los problemáticos (fix propio por mixin, update, o documentarlo como
+  infixeable para el bug report), y **recuperar un pack que funcionaba y se rompió tras una
+  actualización**. Cubre tres escenarios —modpack con desarrollo estilo DCPort (proyecto Gradle
+  con perfil de depuración), instancia normal de launcher (Prism, CurseForge, Modrinth), y un
+  pack ajeno sin nada montado— y cómo montar el entorno en cada uno, empezando siempre por
+  asegurar la vuelta atrás con git o equivalente. Incluye campañas de activación por olas y
+  bisección disciplinada. Usar siempre que el usuario pida: actualizar el modpack, "integra/activa
+  este mod", "arregla los mods problemáticos", "revisa updates", "activa el modpack full",
+  "ejecuta la ola N", "monta la gestión de mods en X", "se me rompió el modpack", "dejó de
+  arrancar tras actualizar", o cualquier campaña sobre los mods de un pack.
+  Triggers: /mod-ops, "campaña de mods", "mod problemático", "update de mods", "ola de
+  activación", "modpack roto", "no arranca el modpack", "reparar modpack", "bisecar mods".
 ---
 
-# mod-ops: gestión y rescate de mods en modpack dev
+# mod-ops: gestionar, rescatar y reparar los mods de un modpack
 
 Metodología destilada de las campañas DeceasedCraft 2026-07 (rescate de problemáticos:
-7 rescatados / 3 unfixed; + Ola 1 de activación: 32/33 verdes). Aplica a cualquier
-modpack NeoForge en desarrollo con la infraestructura descrita abajo.
+7 rescatados / 3 unfixed; + Ola 1 de activación: 32/33 verdes) y del trabajo posterior en
+CNNY-Server. Aplica a **cualquier** modpack —NeoForge, Forge o Fabric; en desarrollo o
+simplemente instalado— con los tres escenarios de montaje descritos abajo.
+
+**Lo primero, siempre:** asegurar que se puede volver atrás. Reparar es prueba y error, y el error
+es destructivo. Ver la sección siguiente antes de desactivar el primer mod.
 
 ---
 
@@ -52,33 +59,160 @@ se despliega y se avisa: dos jars con el mismo modid tumban el juego.
 
 ---
 
-## Bootstrap en un modpack similar (incrustar el entorno)
+## Antes de tocar nada: poder volver atrás
 
-Para replicar esta gestión en otra instancia dev con instancia Prism hermana:
+Reparar un modpack es prueba y error, y el error **es destructivo**: desactivas ocho mods, el
+arranque cambia, y a la tercera ronda ya no recuerdas cuál estaba activado antes ni con qué versión.
+Sin poder volver atrás, cada prueba fallida te deja peor que al empezar, y el pack acaba en un
+estado que no es ni el roto original ni uno que funcione.
+
+**Antes de desactivar el primer mod, asegura la vuelta atrás.** No es ceremonia: es lo que hace que
+bisecar sea barato. Si volver al estado anterior cuesta dos minutos, pruebas sin miedo; si cuesta
+una tarde, empiezas a "probar con cuidado", que es como no probar.
+
+### Qué versionar y qué no
+
+| Versionar | Ignorar |
+|---|---|
+| El **índice** (`pack/index/*.toml`): qué mod, qué versión, qué lado, qué estado y **por qué** | Los **jars**: pesan, y se vuelven a descargar desde el índice |
+| `config/`, `kubejs/`, `defaultconfigs/`, datapacks | `logs/`, `crash-reports/` (útiles, pero no en git) |
+| La lista de mods del launcher (`mods/.index/*.pw.toml` en Prism/packwiz) | El **mundo** (`saves/`): binario y enorme; va aparte, con copia normal |
+| `options.txt` y los keybinds si te importan | Cachés (`.mixin.out/`, `libraries/`, `assets/`) |
+
+Esa es la "copia de seguridad inteligente": **versionar la metadata, no los binarios**. Un repo de
+un modpack de 300 mods así ocupa unos pocos megas y te deja hacer `git diff` para ver exactamente
+qué cambió entre el pack que funcionaba y el que no — que es la pregunta que estás intentando
+responder.
+
+### Si el pack no tiene control de versiones (el caso normal)
+
+Empieza por ahí, aunque sea un modpack que bajaste hecho. Cinco minutos:
 
 ```bash
-# 1. Instalar la herramienta (una vez por máquina)
-uv tool install --force --with textual \
-    /ruta/a/modman
-
-# 2. Declarar el pack. Escribe modman.toml; --client-only si no hay servidor
-cd <repo-del-pack>
-modman init . --mc <version> --loader neoforge
-$EDITOR modman.toml        # revisar las rutas de los destinos
-
-# 3. Comprobar que los destinos existen antes de nada
-modman targets
-
-# 4. Sembrar el índice desde lo que ya hay instalado
-modman add <slug> <slug> …   # arrastra las dependencias obligatorias
-modman libs                  # fija lado y estado de las librerías según quién las usa
-modman status                # los jars sin metadata salen listados: decidir uno a uno
-
-# 5. mkdir -p pack/log && crear fixlog.md + unfixed.md (cabeceras de este skill)
-# 6. Sección en el CLAUDE.md del pack apuntando a modman y a este skill
+cd <carpeta del pack>          # la que tiene mods/, config/, options.txt
+git init
+cat > .gitignore <<'EOF'
+# Binarios y cachés: se regeneran
+mods/*.jar
+mods/*.jar.disabled
+libraries/
+assets/
+versions/
+.mixin.out/
+crash-reports/
+logs/
+saves/
+resourcepacks/
+shaderpacks/
+EOF
+git add -A && git commit -m "estado de partida: el pack tal y como está roto"
 ```
 
-`pack/index/` va a git; `pack/cache/` y `pack/patched/`, no.
+Ese primer commit es el más importante de todos: es **el estado roto**, y vas a querer volver a él
+más de una vez para comparar. Etiquétalo: `git tag roto-original`.
+
+A partir de ahí, un commit por ronda de pruebas (`git commit -am "ola 2: off los 6 de render"`). El
+historial se convierte en el registro de qué probaste, que si no acabas anotando a mano y peor.
+
+### Si además no tienes el pack anterior que sí funcionaba
+
+Es lo habitual tras una actualización que rompió algo. Búscalo antes de rendirte:
+
+- **El launcher suele guardar copias.** Prism hace copia de la instancia al actualizar un modpack;
+  CurseForge y Modrinth mantienen versiones anteriores del pack descargables. Recuperar el
+  `mods/.index/` o el `manifest.json` de la versión que funcionaba te da **la lista exacta de
+  versiones buenas**, que es media reparación hecha.
+- **El propio `.minecraft` tiene pistas**: `logs/` con los arranques buenos (los mods y versiones
+  salen en la cabecera del log) y `crash-reports/` con el primero que falló, que acota la fecha.
+- Si lo encuentras, **commitea también ese estado** en una rama (`git checkout -b funcionaba`) y
+  entonces `git diff` entre las dos ramas te dice literalmente qué cambió.
+
+### Alternativas si git no encaja
+
+Git es lo recomendable porque el diff es lo que responde la pregunta, pero cualquier cosa que
+permita volver atrás sirve más que nada:
+
+- **modman** ya versiona por su cuenta lo suyo: `pack/log/` guarda copia del índice antes de cada
+  cambio de versión, y `modman rollback <slug>` deshace el último update. No sustituye a git para
+  configs, pero cubre el mod a mod.
+- **packwiz** si el pack ya lo usa: su metadata (`*.pw.toml`) es texto y va a git igual de bien.
+- **Snapshots del sistema de archivos** (btrfs, ZFS, Timeshift) si tienes: baratísimos y cubren
+  todo, incluido el mundo. Útiles como red de seguridad **además** de git, no en su lugar: un
+  snapshot no te deja hacer diff de qué mod cambió.
+- **Copia con fecha a pelo** (`cp -r pack pack.2026-09-28-antes-de-tocar`) si no hay nada más. Feo,
+  pero un `diff -r` entre dos carpetas también responde preguntas. Acuérdate de borrarlas después.
+
+> Regla: **nunca empieces a desactivar mods en la única copia que existe.** Si el usuario no quiere
+> git, pide al menos la copia con fecha antes de la primera prueba, y dilo explícitamente.
+
+---
+
+## Montar el entorno — tres escenarios
+
+Instalar la herramienta, una vez por máquina:
+
+```bash
+uv tool install --force --with textual \
+    /ruta/a/modman
+modman help          # qué comandos hay, y cuáles escriben
+```
+
+
+El flujo de reparación es el mismo; lo que cambia es **cómo iteras**, y eso depende de qué tipo de
+pack tienes delante. Identifícalo antes de nada.
+
+### A. Modpack con desarrollo estilo DCPort (proyecto Gradle)
+
+El pack es un repo con `build.gradle`, los jars en `lib/mods/` y un runner (`./run-test.sh`). Es el
+caso cómodo: puedes iterar **sin tocar el estado real del pack**.
+
+- **Perfil de depuración separado.** `--modpack-debug` carga los `.jar` activos **más** una lista
+  curada (`lib/profiles/debug-mods.txt`) cuyos jars se cargan aunque sigan `.disabled` en disco.
+  Iterar una ola = editar esa lista de texto y rebootear; `lib/mods/` no cambia, y con él no cambia
+  el perfil `--modpack-progress`, que es el estado real.
+- Comentar un candidato con `#` lo saca de la ola **sin perder la anotación de por qué**.
+- Si el pack destino no tiene ese perfil, crearlo es parte del montaje: un `case` en
+  `build.gradle` que lea la lista y resuelva cada nombre a `.jar` o `.jar.disabled`, más un flag en
+  el runner.
+
+Ventaja real: una ronda de bisección cuesta editar una línea. Es lo que hace viable partir por
+mitades treinta veces.
+
+### B. Modpack normal en una instancia de launcher (Prism, CurseForge, Modrinth)
+
+No hay Gradle ni perfiles: lo que carga el juego es lo que hay en `mods/`. Aquí iteras **moviendo
+jars**, así que lo que tiene que ser barato es deshacerlo.
+
+```bash
+# Montar modman sobre la instancia (no hace falta que sea un "proyecto")
+cd <carpeta de la instancia>        # la que tiene mods/ y config/
+git init && git add -A && git commit -m "estado de partida"   # ver la sección anterior
+modman init . --mc <version> --loader <neoforge|forge|fabric> --client-only
+$EDITOR modman.toml                 # el destino apunta a ./mods
+modman targets                      # comprobar que la ruta existe
+```
+
+Con el índice sembrado, una ronda es:
+
+```bash
+modman set <mod1> state=off note="ola 2: sospechoso de render"
+modman set <mod2> state=off note="ola 2"
+modman deploy                       # mueve los jars a .jar.disabled
+# … arrancar y observar …
+git commit -am "ola 2: off render (6)"
+```
+
+Y deshacer una ronda entera es `git checkout pack/index/ && modman deploy`.
+
+**Si no quieres ni instalar modman**, el equivalente manual es mover a mano a `mods/.disabled/` y
+apuntar qué moviste — pero entonces el "apuntar" lo tienes que hacer tú y es justo lo que se olvida
+a la tercera ronda. Con modman la nota viaja en el índice y sale en `modman status`.
+
+### C. El pack no es tuyo, o no hay nada de nada
+
+Un `.zip` que te pasaron, o una instancia de alguien. Antes de tocar: **copia la carpeta entera** y
+trabaja sobre la copia. Luego aplica el escenario B sobre ella. Nunca repares en la única copia,
+sobre todo si no es tuya.
 
 ---
 
@@ -95,18 +229,48 @@ Cuando el objetivo es activar MUCHOS mods desactivados, no ir uno por uno a cieg
    contenido/registros → cliente/render/UI (mucha superficie de mixins) → stacks
    delicados uno a uno → capas Fabric/Connector al final. Bloqueados conocidos y
    dependencias fuera del pack van a un "parking", no a una ola.
-3. **Perfil `--modpack-debug`** (separado de `--modpack-progress`, que es el estado real
-   del pack que NO se toca durante la iteración): carga los `.jar` activos MÁS la lista
-   curada `lib/profiles/debug-mods.txt`, cuyos jars se cargan **aunque sigan `.disabled`
-   en disco**. Iterar una ola = editar esa lista de texto y rebootear; el estado de
-   `lib/mods` (y con él modpack-progress) nunca cambia. Comentar un candidato con `#` =
-   sacarlo de la ola sin perder la anotación de por qué.
+3. **Iterar según el escenario** (ver la sección anterior): en un pack estilo DCPort, editando la
+   lista del perfil `--modpack-debug` sin tocar el estado real; en una instancia de launcher, con
+   `modman set … state=off` + `modman deploy` y un commit por ronda.
 4. Un boot limpio por ola (+ los de bisección). El culpable de cada ola pasa por las 3
    vías de abajo; los inocentes se reintegran y se re-confirma verde con TODOS juntos.
 
-> El perfil se implementa en `build.gradle` (case `modpack-debug`, lee debug-mods.txt y
-> resuelve cada nombre a `.jar` o `.jar.disabled`) + un flag en `run-test.sh`. Si el pack
-> destino no lo tiene, crearlo es parte del bootstrap de la campaña.
+---
+
+## Reparar un pack que funcionaba y se rompió tras una actualización
+
+Distinto de la campaña de arriba: allí se **activa** lo que nunca funcionó, aquí se **recupera** lo
+que funcionaba. Y eso cambia la estrategia, porque aquí sí existe un estado bueno conocido.
+
+1. **No empieces desactivando.** Empieza preguntando **qué cambió**. Una actualización que rompe
+   algo casi siempre cambió pocas cosas, y la lista de cambios es más barata que cualquier
+   bisección:
+   - Con git o packwiz: `git diff <tag-bueno> -- pack/index/` o el diff de los `.pw.toml`.
+   - Sin nada: compara el `mods/` actual con el de la copia del launcher; `ls` de ambos y `diff`.
+     Los nombres de archivo llevan la versión, así que el diff ya dice qué subió.
+   - Si no hay copia: la cabecera de un `latest.log` de cuando funcionaba lista los mods cargados
+     con su versión. Es feo de leer pero es una lista buena.
+2. **Lee el fallo de verdad antes de tocar nada.** Crash report para la excepción, `latest.log`
+   para la causa real —lo que dejó "above errors"—, y si el crash nombra a un mod, sospecha del
+   tercero que altera ese sistema, no del que sale en la pila. (Skill `minecraft:crash-review` si
+   el pack es un port en desarrollo.)
+3. **La hipótesis fuerte primero.** Si el diff dice que subieron cuatro mods y el crash habla de
+   worldgen, empieza por el de worldgen. Bisecar por mitades es el plan B, no el A: es sistemático
+   pero cuesta log₂(n) arranques, y cada arranque de un pack grande son minutos.
+4. **Volver atrás mod a mod, no el pack entero.** Revertir solo el sospechoso a su versión anterior
+   (`modman update <slug> --version <la buena>`, o `modman rollback <slug>` si el update lo hizo
+   modman) aísla la causa. Revertir el pack entero confirma que "algo de la actualización" lo
+   rompió, que ya lo sabías.
+5. **Si el culpable es una dependencia y no el mod**, `modman doctor` lo dice: una librería que
+   subió de versión y dejó de proveer lo que otro esperaba sale como dependencia que falta.
+6. **Cuando lo tengas**, decide por las tres vías de abajo (update / fix propio / unfixed) y
+   **déjalo escrito** en `fixlog.md`: qué mod, qué versión lo rompió, cuál funciona y por qué. La
+   próxima actualización va a tentarte a volver a subirlo.
+
+> **Trampa clásica:** el pack "se rompió tras actualizar" pero lo que cambió fue **Java**, el
+> loader (NeoForge/Forge) o el launcher, no los mods. Antes de bisecar 300 jars, comprueba la
+> versión de Java con la que arranca y la del loader de la instancia. Un `UnsupportedClassVersion`
+> o un `NoSuchMethodError` en clases del loader apuntan ahí y no a ningún mod.
 
 ---
 

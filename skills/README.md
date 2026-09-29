@@ -6,7 +6,7 @@ herramienta que describe.
 
 | Skill | Qué cubre |
 |---|---|
-| [`mod-ops`](mod-ops/SKILL.md) | Metodología de gestión de un modpack: updates, integrar mods nuevos, rescatar los problemáticos, campañas de activación por olas. Es la skill de modman |
+| [`mod-ops`](mod-ops/SKILL.md) | Gestionar, rescatar y **reparar** los mods de un modpack: updates, integrar mods nuevos, campañas de activación por olas, bisección, y recuperar un pack que se rompió tras actualizar. Cubre tres escenarios de montaje (proyecto Gradle estilo DCPort, instancia de launcher, pack ajeno) y empieza siempre por asegurar la vuelta atrás |
 
 ```bash
 ./skills/install.sh            # enlaza (o reenlaza) en ~/.claude
