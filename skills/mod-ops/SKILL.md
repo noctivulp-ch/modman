@@ -380,14 +380,21 @@ grep -c  'Sound engine started' logs/latest.log                                 
 grep -c  'Preparing crash report' logs/latest.log                                                     # 0
 ```
 
-### Cierra el juego después de cada prueba
+### Cierra el juego después de cada prueba — SIEMPRE
 
-Si no, se queda abierto —muchas veces en la pantalla de errores— comiendo memoria, y **el proceso
+Si no, se queda abierto —casi siempre en la pantalla de errores— comiendo memoria, y **el proceso
 superviviente falsea la prueba siguiente**: el lanzador cree que ya hay una instancia y el
-veredicto que te da no es del arranque que acabas de hacer. Antes de cada prueba:
+veredicto no es del arranque que acabas de hacer.
+
+No es un consejo: es parte del ciclo. Cada prueba es **lanzar → leer el log → cerrar**, y el cierre
+va en el mismo comando que el lanzamiento, no en uno aparte que se puede olvidar. Se olvidó tres
+veces en una sola sesión de reparación, y cada olvido dejó una ventana de error abierta y una
+medición inservible.
 
 ```bash
-ps -eo args | grep -c '[<instancia>]' # 0 antes de lanzar
+# al final de cada prueba, sin excepción
+for p in $(ps -eo pid,args | grep -i '[<instancia>]' | awk '{print $1}'); do kill "$p"; done
+ps -eo args | grep -c '[<instancia>]'   # tiene que dar 0 antes de la prueba siguiente
 ```
 
 ### El log tarda en escribirse
@@ -424,6 +431,21 @@ con todo lo que la usa. Dentro de una familia, o van todos o no va ninguno.
 Y antes de instalar nada, **calcula si el conjunto se sostiene**: lee del jar candidato sus
 `dependencies` declaradas y descarta las actualizaciones cuyas dependencias no se cumplan con lo
 que habrá después. Es un punto fijo de tres líneas y evita la cascada entera.
+
+### Ve a la última versión, no subas peldaño a peldaño
+
+Actualizar «un poco» —a la siguiente versión, o a la mínima que pide alguien— es una escalera de
+caracol: cada peldaño destapa el mismo tipo de conflicto otra vez, y acabas repitiendo el ciclo de
+arrancar, leer el log y resolver muchas más veces de las que habría costado ir directo al final.
+Lo mismo vale para el cargador de mods: si cuatro mods piden versiones distintas del loader, se
+pone la última de la línea y no la mínima que contenta al primero.
+
+Pasó en una reparación real: NeoForge 21.1.216 → .219 porque lo pedían dos mods, y al arrancar
+apareció otro que pedía .230. Ir a la última de la línea desde el principio se habría ahorrado dos
+vueltas completas.
+
+La regla no es «actualizarlo todo a la fuerza», es **no actualizar a medias**: lo que se toca, se
+lleva a su última versión compatible; lo que se deja, se deja entero.
 
 ### Un addon abandonado bloquea a su familia
 
