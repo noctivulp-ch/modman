@@ -42,7 +42,7 @@ def scan_jar(path: Path, deep: bool = True) -> dict:
     # jar declara como propios. La diferencia importa: dos mods pueden embeber la misma librería
     # sin chocar —NeoForge se queda con la versión más alta—, y confundirlos hacía que modman se
     # negara a desplegar Iris porque Kiwi trae dentro el mismo `fabric_api_base`.
-    info = {"jar": path.name, "provides": set(), "own": set(), "required": {}, "optional": {}, "flags": [], "mixin_configs": 0,
+    info = {"jar": path.name, "provides": set(), "own": set(), "incompatible": {}, "required": {}, "optional": {}, "flags": [], "mixin_configs": 0,
             "declared_client_only": False, "display_test": None, "data_dirs": set(), "asset_dirs": set(),
             "classes": 0, "client_ref_outside": 0, "client_ref_classes": [], "required_side": {}, "net_channel": "", "content": set(), "ui_physics": set()}
     try:
@@ -83,10 +83,26 @@ def scan_jar(path: Path, deep: bool = True) -> dict:
             if not isinstance(dlist, list):
                 continue
             for d in dlist:
-                did, dtype = d.get("modId"), (d.get("type") or "required").lower()
+                did = d.get("modId")
                 if not did or did in BUILTIN:
                     continue
                 rng = d.get("versionRange", "*")
+                # Un rango imposible no es una dependencia: es una **incompatibilidad
+                # declarada**. Es como Forge y NeoForge dicen «si esto está instalado, no
+                # arranco», y el modismo es literal: Embeddium 0.3.31 declara
+                # `textrues_embeddium_options` con `[0.0.0-NOT-COMPATIBLE]` porque absorbió
+                # ese mod. Leerlo como dependencia lleva a instalarlo, que es justo lo que
+                # rompe el arranque: «Unsupported installed optional dependencies».
+                if "NOT-COMPATIBLE" in rng.upper() or rng.replace(" ", "") in ("[,)", "(,)"):
+                    info["incompatible"][did] = rng
+                    continue
+                # `type` es el campo de NeoForge; los mods de Forge 1.20.1 y anteriores usan
+                # `mandatory`. Mirar solo `type` daba por obligatorio **todo** lo declarado por
+                # un mod de Forge, incluidas sus dependencias opcionales.
+                if (tipo := d.get("type")):
+                    dtype = str(tipo).lower()
+                else:
+                    dtype = "required" if d.get("mandatory", True) else "optional"
                 (info["required"] if dtype == "required" else info["optional"])[did] = rng
                 if outer and dtype == "required":
                     info["required_side"][did] = str(d.get("side") or "BOTH").upper()   # en qué lado hace falta la dep

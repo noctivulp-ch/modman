@@ -468,6 +468,27 @@ class Graph:
             return cand
         return ""
 
+    def check_incompatibilities(self) -> list[str]:
+        """Mods activos que otro mod activo declara incompatibles.
+
+        Forge y NeoForge lo expresan con un rango de versión imposible —el idioma es literalmente
+        `[0.0.0-NOT-COMPATIBLE]`— y el arranque falla con «Unsupported installed optional
+        dependencies», que no dice quién lo declaró ni por qué. Aquí se dice: Embeddium 0.3.31
+        rechaza a TexTrue's Embeddium Options porque absorbió ese mod.
+        """
+        fuera: list[str] = []
+        activos = {s: m for s, m in self.mods.items() if m.state is State.ON}
+        provee = {mid: s for s, m in activos.items() for mid in m.scan.own_modids}
+        for slug, m in sorted(activos.items()):
+            for modid in m.scan.incompatible:
+                culpable = provee.get(modid)
+                if culpable and culpable != slug:
+                    fuera.append(
+                        f"{slug} declara incompatible {modid} y lo provee {culpable}: "
+                        f"con los dos activos el arranque falla"
+                    )
+        return fuera
+
     def check_pack_formats(self, mc_version: str) -> list[PackFormatIssue]:
         """Paquetes de recursos y datapacks cuyo `pack_format` no es el de esta versión.
 

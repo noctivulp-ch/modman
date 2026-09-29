@@ -335,6 +335,10 @@ class Modman:
                 })
         return {"loaders": {k: sorted(v) for k, v in cargadores.items()}, "packs": packs}
 
+    def incompatibilities(self) -> list:
+        """Pares de mods activos que se declaran incompatibles entre sí."""
+        return self.graph().check_incompatibilities()
+
     def pack_formats(self) -> list[PackFormatIssue]:
         """Paquetes de recursos que esta versión del juego marcará como incompatibles."""
         return self.graph().check_pack_formats(self.cfg.mc_version)
@@ -424,6 +428,7 @@ class Modman:
                 mod.scan.own = sorted(str(x) for x in (datos.get("own") or ()))
                 mod.scan.requires = sorted(str(x) for x in (datos.get("required") or ()))
                 mod.scan.optional = sorted(str(x) for x in (datos.get("optional") or ()))
+                mod.scan.incompatible = sorted(str(x) for x in (datos.get("incompatible") or ()))
                 self.index.save(mod)
             consenso = self.ext.consensus(mod, facts)
             salida.append(
@@ -787,6 +792,7 @@ def _scan_to_raw(datos: dict) -> dict:
             k for k, v in (datos.get("required_side") or {}).items() if v == "SERVER"
         ),
         "optional": orden(datos.get("optional")),
+        "incompatible": orden(datos.get("incompatible")),
         "client_only_declared": bool(datos.get("declared_client_only")),
         "display_test": datos.get("display_test") or "",
         "data": orden(datos.get("data_dirs")),

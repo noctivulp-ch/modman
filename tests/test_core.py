@@ -652,3 +652,53 @@ def test_un_shaderpack_declara_lo_que_necesita_y_se_compara_con_el_cargador(tmp_
     assert faltan == {"SSBO"}
     # La mayoría no exige nada: eso es «sin veredicto», no «incompatible».
     assert pack_features(_zip_con(tmp_path, "b.zip", {"shaders/x.fsh": "void main(){}"})) == {}
+
+
+def test_un_rango_imposible_es_una_incompatibilidad_y_no_una_dependencia(tmp_path):
+    """`[0.0.0-NOT-COMPATIBLE]` es como Forge dice «si esto está, no arranco».
+
+    Leerlo como dependencia hace instalar el mod que rompe el arranque, que es exactamente lo
+    que pasó montando un banco de pruebas: Embeddium 0.3.31 declara así a TexTrue's Embeddium
+    Options porque absorbió ese mod, modman lo instaló, y el juego arrancó sin mods con
+    «Unsupported installed optional dependencies».
+    """
+    import zipfile
+
+    from modman.core import jarscan
+
+    jar = tmp_path / "embeddium.jar"
+    with zipfile.ZipFile(jar, "w") as z:
+        z.writestr("META-INF/mods.toml", """
+[[mods]]
+modId = "embeddium"
+[[dependencies.embeddium]]
+modId = "textrues_embeddium_options"
+mandatory = false
+versionRange = "[0.0.0-NOT-COMPATIBLE]"
+[[dependencies.embeddium]]
+modId = "oculus"
+mandatory = false
+versionRange = "*"
+[[dependencies.embeddium]]
+modId = "unlibrary"
+mandatory = true
+versionRange = "*"
+""")
+    datos = jarscan.scan_jar(jar, deep=False)
+    assert datos["incompatible"] == {"textrues_embeddium_options": "[0.0.0-NOT-COMPATIBLE]"}
+    # Y `mandatory = false` es opcional: mirar solo `type`, que es el campo de NeoForge, daba
+    # por obligatorio todo lo que declarase un mod de Forge 1.20.1.
+    assert sorted(datos["optional"]) == ["oculus"]
+    assert sorted(datos["required"]) == ["unlibrary"]
+
+
+def test_dos_mods_activos_que_se_declaran_incompatibles_se_avisan():
+    from modman.core.model import Scan
+
+    a = Mod(slug="embeddium", scan=Scan(modids=["embeddium"], incompatible=["textrues"]))
+    b = Mod(slug="textrues", scan=Scan(modids=["textrues"], own=["textrues"]))
+    (aviso,) = _grafo(a, b).check_incompatibilities()
+    assert "embeddium" in aviso and "textrues" in aviso
+    # Con el segundo apagado no hay conflicto: es una combinación, no un defecto de ninguno.
+    b.state = State.OFF
+    assert _grafo(a, b).check_incompatibilities() == []

@@ -304,6 +304,8 @@ class Scan:
     own: list[str] = field(default_factory=list)
     requires: list[str] = field(default_factory=list)
     optional: list[str] = field(default_factory=list)
+    #: Modids que el jar declara con un rango imposible: «si esto está, no arranco».
+    incompatible: list[str] = field(default_factory=list)
     suggested_side: Side | None = None
     signals: list[str] = field(default_factory=list)
 

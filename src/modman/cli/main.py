@@ -177,6 +177,7 @@ def cmd_doctor(a, out: Out) -> int:
     problemas = m.doctor()
     faltan = m.requirements()
     formatos = m.pack_formats()
+    incompat = m.incompatibilities()
     todos_menus = [i for i in m.choices() if not i.ok]
     # Lo que solo está sin indexar no es un fallo del pack: es un hueco del índice.
     menus = [i for i in todos_menus if not i.unverified]
@@ -195,15 +196,18 @@ def cmd_doctor(a, out: Out) -> int:
             "pack_formats": [{"slug": f.slug, "kind": f.kind.value, "declared": f.declared,
                               "expected": f.expected, "mc_version": f.mc_version,
                               "made_for": f.made_for} for f in formatos],
+            "incompatible": incompat,
             "choices": [{"slug": i.slug, "chosen": i.chosen, "unverified": i.unverified,
                          "closest": [{"id": e.option.id, "missing": e.missing,
                                       "maybe": e.maybe} for e in i.applicable[:3]]}
                         for i in todos_menus],
         })
-        return 1 if (problemas or graves or menus) else 0
-    if not problemas and not faltan and not formatos and not todos_menus:
+        return 1 if (problemas or graves or menus or incompat) else 0
+    if not problemas and not faltan and not formatos and not todos_menus and not incompat:
         out.ok("cada mod activo tiene sus dependencias en su lado, y las declaradas se cumplen")
         return 0
+    for x in incompat:
+        out.warn(x)
     for r in graves:
         out.warn(str(r))
     for p in problemas:

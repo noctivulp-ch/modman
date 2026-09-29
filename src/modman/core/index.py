@@ -107,6 +107,7 @@ def to_mod(raw: dict, slug: str) -> Mod:
             own=list(scan_raw.get("own", [])),
             requires=list(scan_raw.get("required", [])),
             optional=list(scan_raw.get("optional", [])),
+            incompatible=list(scan_raw.get("incompatible", [])),
             # El escaneo marca con "?" que es una sugerencia: no se convierte en decisión sola.
             suggested_side=side_of(scan_raw.get("side", ""), None) if scan_raw.get("side") else None,
             signals=list(scan_raw.get("flags", [])),
@@ -216,6 +217,7 @@ def to_raw(mod: Mod) -> dict:
             "own": list(mod.scan.own),
             "required": list(mod.scan.requires),
             "optional": list(mod.scan.optional),
+            "incompatible": list(mod.scan.incompatible),
         },
     )
     if mod.requires:
