@@ -596,3 +596,59 @@ def test_las_opciones_y_la_eleccion_sobreviven_al_guardado():
     assert a.needs[0].min_version == "1.2" and a.needs[1].optional and a.mc == ("1.20.1", "1.21..1.21.4")
     # `recommended = false` es un dato y el volcado no debe perderlo por ser falsy.
     assert vuelta.option("b").recommended is False
+
+
+# ---------------------------------------------------------------------------------------------
+# Capacidades de Iris: lo que un shaderpack exige contra lo que el cargador implementa.
+# ---------------------------------------------------------------------------------------------
+def _class_falsa(nombres, con_long=False) -> bytes:
+    """Un `.class` con un constant pool de cadenas, para probar el lector sin compilar nada."""
+    import struct
+
+    entradas = [b"\x01" + struct.pack(">H", len(n.encode())) + n.encode() for n in nombres]
+    if con_long:
+        # Un Long ocupa DOS huecos del pool: es el detalle que desalinea a un lector ingenuo.
+        entradas.insert(1, b"\x05" + b"\x00" * 8)
+    total = len(entradas) + (2 if con_long else 1)
+    return b"\xca\xfe\xba\xbe" + b"\x00" * 4 + struct.pack(">H", total) + b"".join(entradas)
+
+
+def _zip_con(tmp_path, nombre, contenido: dict):
+    import zipfile
+
+    ruta = tmp_path / nombre
+    with zipfile.ZipFile(ruta, "w") as z:
+        for k, v in contenido.items():
+            z.writestr(k, v)
+    return ruta
+
+
+def test_las_capacidades_del_cargador_se_leen_de_su_jar_y_no_de_una_tabla(tmp_path):
+    """Una tabla escrita a mano envejece con cada versión y da veredictos falsos.
+
+    El enum `FeatureFlags` está dentro del jar de Iris y de Oculus, así que la lista es siempre
+    la de la versión que hay instalada de verdad.
+    """
+    from modman.core.irisfeat import loader_features
+
+    jar = _zip_con(tmp_path, "oculus.jar", {
+        "net/irisshaders/iris/features/FeatureFlags.class": _class_falsa(
+            ["SSBO", "COMPUTE_SHADERS", "UNKNOWN", "()V", "java/lang/Enum", "ab"], con_long=True),
+    })
+    assert loader_features(jar) == {"SSBO", "COMPUTE_SHADERS"}
+    # Un mod cualquiera no es un cargador de shaders, y eso no es un error.
+    assert loader_features(_zip_con(tmp_path, "otro.jar", {"a.txt": "x"})) == set()
+
+
+def test_un_shaderpack_declara_lo_que_necesita_y_se_compara_con_el_cargador(tmp_path):
+    from modman.core.irisfeat import pack_features
+
+    z = _zip_con(tmp_path, "shader.zip", {"shaders/shaders.properties":
+                                          "iris.features.required = CUSTOM_IMAGES SSBO\n"
+                                          "iris.features.optional=HIGHER_SHADOWCOLOR\n"})
+    datos = pack_features(z)
+    assert datos == {"required": ["CUSTOM_IMAGES", "SSBO"], "optional": ["HIGHER_SHADOWCOLOR"]}
+    faltan = set(datos["required"]) - {"CUSTOM_IMAGES"}
+    assert faltan == {"SSBO"}
+    # La mayoría no exige nada: eso es «sin veredicto», no «incompatible».
+    assert pack_features(_zip_con(tmp_path, "b.zip", {"shaders/x.fsh": "void main(){}"})) == {}

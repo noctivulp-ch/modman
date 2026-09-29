@@ -295,6 +295,46 @@ class Modman:
         self.index.save(mod)
         return mod
 
+    def shader_features(self) -> dict:
+        """¿Los shaderpacks instalados funcionan con el cargador que hay puesto?
+
+        Es la pregunta de cualquiera que use Oculus —el puerto de Iris a Forge, que va por
+        detrás— y hoy solo se responde abriendo el juego y probando shader por shader: si el
+        cargador no implementa una capacidad que el shaderpack exige, sale una pantalla de error
+        al seleccionarlo y en el log no queda nada que lo relacione con la versión del cargador.
+
+        Se mira **la carpeta**, no el índice: los shaderpacks de una instancia heredada casi
+        nunca están indexados, y la comprobación tiene que servir igual.
+        """
+        from . import irisfeat
+
+        cargadores: dict[str, set] = {}
+        for t in self.cfg.active_targets:
+            if Kind.MOD not in t.kinds or not t.path.is_dir():
+                continue
+            for jar in sorted(t.path.glob("*.jar")):
+                if (feats := irisfeat.loader_features(jar)):
+                    cargadores[jar.name] = feats
+        implementadas: set = set().union(*cargadores.values()) if cargadores else set()
+
+        packs = []
+        for t in self.cfg.active_targets:
+            if Kind.SHADER not in t.kinds or not t.path.is_dir():
+                continue
+            for z in sorted(t.path.glob("*.zip")):
+                datos = irisfeat.pack_features(z)
+                requeridas = set(datos.get("required") or ())
+                packs.append({
+                    "file": z.name,
+                    "target": t.name,
+                    "required": sorted(requeridas),
+                    "optional": sorted(datos.get("optional") or ()),
+                    # Sin cargador no se dictamina: no saber cuál hay no es lo mismo que que falte.
+                    "missing": sorted(requeridas - implementadas) if cargadores else [],
+                    "ok": not cargadores or not (requeridas - implementadas),
+                })
+        return {"loaders": {k: sorted(v) for k, v in cargadores.items()}, "packs": packs}
+
     def pack_formats(self) -> list[PackFormatIssue]:
         """Paquetes de recursos que esta versión del juego marcará como incompatibles."""
         return self.graph().check_pack_formats(self.cfg.mc_version)

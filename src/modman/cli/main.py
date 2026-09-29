@@ -228,6 +228,42 @@ def cmd_doctor(a, out: Out) -> int:
     return 1 if (problemas or graves or menus) else 0
 
 
+def cmd_shaders(a, out: Out) -> int:
+    m = _open(a)
+    info = m.shader_features()
+    if out.as_json:
+        out.json(info)
+        return 0 if all(p["ok"] for p in info["packs"]) else 1
+    if not info["loaders"]:
+        out.warn("no hay ningún cargador de shaders (Iris u Oculus) en los destinos de mods: "
+                 "los shaderpacks no se pueden ni seleccionar")
+    for jar, feats in info["loaders"].items():
+        out.line(f"cargador: {jar}")
+        out.note("implementa: " + ", ".join(feats))
+    out.line()
+    if not info["packs"]:
+        out.note("ningún .zip en los destinos de shaders "
+                 "(¿falta un destino con kinds = [\"shader\"]?)")
+        return 0
+    filas = []
+    for p in info["packs"]:
+        if not p["required"]:
+            estado, detalle = "—", "no exige capacidades concretas"
+        elif p["ok"]:
+            estado, detalle = "✓", ", ".join(p["required"])
+        else:
+            estado, detalle = "✗", "FALTAN: " + ", ".join(p["missing"])
+        filas.append([estado, p["file"], detalle])
+    out.table(["", "shaderpack", "capacidades exigidas"], filas)
+    malos = [p for p in info["packs"] if not p["ok"]]
+    out.line()
+    if malos:
+        out.warn(f"{len(malos)} no cargarán con este cargador; hace falta uno más nuevo")
+        return 1
+    out.ok(f"los {len(info['packs'])} shaderpacks encajan con el cargador instalado")
+    return 0
+
+
 def cmd_requires(a, out: Out) -> int:
     """Listar, proponer, declarar y quitar las dependencias que se escriben a mano."""
     m = _open(a)
@@ -714,6 +750,7 @@ def build_parser() -> argparse.ArgumentParser:
         "versions": cmd_versions,
         "deps": cmd_deps,
         "doctor": cmd_doctor,
+        "shaders": cmd_shaders,
         "requires": cmd_requires,
         "check": cmd_check,
         "set": cmd_set,

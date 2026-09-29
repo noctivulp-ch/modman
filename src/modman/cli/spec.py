@@ -156,6 +156,17 @@ COMMANDS: tuple[Command, ...] = (
         examples=("modman doctor", "modman doctor || echo 'revisar antes de arrancar'"),
     ),
     Command(
+        "shaders",
+        "¿los shaderpacks instalados van con el cargador que hay?",
+        "Compara las capacidades que cada shaderpack exige en su shaders.properties "
+        "(iris.features.required) con las que implementa de verdad el cargador instalado, "
+        "leídas de su jar y no de una tabla que envejece. Responde sin abrir el juego la "
+        "pregunta de quien usa Oculus, que va por detrás de Iris: si falta una capacidad, el "
+        "shader no carga y el log no lo relaciona con la versión del cargador. Mira la carpeta, "
+        "no el índice.",
+        examples=("modman shaders", "modman --json shaders | jq '.packs[]|select(.ok|not)'"),
+    ),
+    Command(
         "requires",
         "dependencias declaradas a mano (mod ↔ shader ↔ paquete de texturas)",
         "Las que ningún metadato trae y ningún launcher comprueba: un mod que necesita una "

@@ -599,6 +599,42 @@ Los cuatro acoplamientos reales, todos vistos en packs de verdad:
    `pack.mcmeta`; si no coincide, Minecraft lo lista bajo **Incompatible** y lo carga igual.
    Arrastrar un paquete de 1.20.1 a un pack de 1.21.1 funciona… hasta que algo se ve mal.
 
+### Oculus no es «Iris peor»: compruébalo antes de cambiar nada
+
+Muchos shaderpacks llevan dentro avisos del tipo «esta opción requiere Iris 1.7+ (OptiFine NO
+funcionará)». Es fácil leerlos como «no va con Oculus» y ponerse a buscar alternativas. **Casi
+siempre van contra OptiFine, no contra Oculus**, que es un puerto de Iris y suele estar al día
+en capacidades aunque su número de versión no se parezca.
+
+La comprobación objetiva, sin abrir el juego:
+
+```bash
+modman shaders     # lee el enum FeatureFlags del jar del cargador y lo compara con cada zip
+```
+
+Medido en la instancia privada de DeceasedCraft CB (Forge 1.20.1): Oculus 1.8.0 implementa las
+diez capacidades de Iris 1.7/1.8, y de quince shaderpacks instalados **ninguno** exigía nada que
+le faltara. El problema real estaba en otra parte (ver abajo).
+
+### El patrón que sí rompe: un mod que parchea *una versión* de un shader
+
+Aparece dos veces en dos packs distintos, y las dos veces en silencio:
+
+- **EuphoriaPatcher** parchea una versión exacta de Complementary. Con otra:
+  `=== SHADER NOT FOUND ===` en el log y el shader sin aplicar.
+- **Colorwheel Patcher** trae una lista cerrada de shaders y versiones que sabe parchear. El log
+  lo dice en INFO, no en ERROR, y por eso no lo ve nadie:
+
+  ```
+  colorwheel_patcher: - EuphoriaPatches [1.6.3, … 1.6.8] (jar)
+  colorwheel_patcher: - Complementary [5.6, 5.6.1] (jar)
+  colorwheel_patcher: 'ComplementaryUnbound_r5.9.3 + EuphoriaPatches_1.10.5' version is unknown or unsupported
+  ```
+
+Cuando un mod parchea shaders, **su lista de versiones soportadas es una dependencia** y hay que
+declararla (`modman requires … --kind shader --version …`). Y al revisar un pack con shaders, el
+grep del log no puede limitarse a ERROR: estos avisos salen en INFO.
+
 ### Cuando los requisitos son un menú y no una lista
 
 Hay paquetes cuyos requisitos son **varias combinaciones excluyentes**, una por loader y por
@@ -639,6 +675,7 @@ modman requires comp-reimagined --add iris --or oculus --min-version 1.7
 modman requires faithful --add continuity --or ctm --level partial
 modman requires <slug> --suggest     # mira dentro del zip y propone
 modman requires <slug> --options     # stacks alternativos, ordenados por lo que falta
+modman shaders                       # ¿los shaderpacks van con el Iris/Oculus instalado?
 modman doctor                        # comprueba las declaradas + los pack_format
 ```
 

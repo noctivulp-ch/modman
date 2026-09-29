@@ -237,6 +237,35 @@ Marca lo que no cuadra en lugar de callarlo: en la propia página de GEO hay un 
 «Continuity» que apunta a *connectedness*, y sale como `[revisar: el enlace de «Continuity»
 apunta a otro proyecto]`.
 
+### `modman shaders`: ¿tus shaderpacks van con el cargador que tienes?
+
+Iris define unas *feature flags* y cada shaderpack declara cuáles necesita:
+
+```properties
+iris.features.required = CUSTOM_IMAGES SSBO COMPUTE_SHADERS
+```
+
+Si el cargador no implementa una, el shader **no carga**: sale una pantalla de error al
+seleccionarlo y en el log no queda nada que lo relacione con la versión del cargador. Es la duda
+constante de quien usa **Oculus**, el puerto de Iris a Forge, que va por detrás.
+
+```bash
+modman shaders
+```
+
+```
+cargador: oculus-mc1.20.1-1.8.0.jar
+implementa: BLOCK_EMISSION_ATTRIBUTE, COMPUTE_SHADERS, CUSTOM_IMAGES, ENTITY_TRANSLUCENT, …
+
+✓  rethinking-voxels_r0.1-beta9.zip   COMPUTE_SHADERS, CUSTOM_IMAGES, SSBO
+—  Mellow v3.4.1a.zip                 no exige capacidades concretas
+```
+
+**La lista de capacidades se lee del jar del cargador**, del enum `FeatureFlags` que Iris y
+Oculus comparten, no de una tabla en el código: una tabla envejecería con cada versión y daría
+veredictos falsos sobre lo único que se quiere saber con certeza. Y se mira la carpeta, no el
+índice, porque los shaderpacks de una instancia heredada casi nunca están indexados.
+
 ### `pack_format`: el «incompatible» del menú
 
 Cada versión del juego espera un número de formato en el `pack.mcmeta` del paquete. Cuando no
@@ -378,5 +407,5 @@ se genera de la especificación real.
 
 ## Estado
 
-Núcleo, CLI y TUI funcionando, con los 19 comandos del original más `requires`. Verificado contra
-un pack real de 191 mods y contra uno de 340 con shaders y texturas. 74 tests. Faltan la documentación en `docs/` y migrar el repo de origen. Ver `TODO.md`.
+Núcleo, CLI y TUI funcionando, con los 19 comandos del original más `requires` y `shaders`. Verificado contra
+un pack real de 191 mods y contra uno de 340 con shaders y texturas. 76 tests. Faltan la documentación en `docs/` y migrar el repo de origen. Ver `TODO.md`.
