@@ -363,9 +363,113 @@ que funcionaba. Y eso cambia la estrategia, porque aquí sí existe un estado bu
 
 ---
 
+## Medir bien: lo que parece verde y no lo es
+
+Todo lo de abajo salió de equivocarse en una reparación real. Son baratos de comprobar y cada uno
+cuesta una hora si se pasa por alto.
+
+### «Llegó al menú» no es el criterio
+
+FML, cuando un mod falla al cargar, **no crashea**: muestra su pantalla de errores y el juego
+arranca igual. Un wrapper que busque `Sound engine started` dirá OK. El criterio real son tres
+cuentas, y las tres tienen que salir a cero o a lo esperado:
+
+```bash
+grep -cE 'Error during pre-loading phase|Error loading mods|Mod loading has failed' logs/latest.log   # 0
+grep -c  'Sound engine started' logs/latest.log                                                       # 1
+grep -c  'Preparing crash report' logs/latest.log                                                     # 0
+```
+
+### Cierra el juego después de cada prueba
+
+Si no, se queda abierto —muchas veces en la pantalla de errores— comiendo memoria, y **el proceso
+superviviente falsea la prueba siguiente**: el lanzador cree que ya hay una instancia y el
+veredicto que te da no es del arranque que acabas de hacer. Antes de cada prueba:
+
+```bash
+ps -eo args | grep -c '[<instancia>]' # 0 antes de lanzar
+```
+
+### El log tarda en escribirse
+
+Al cambiar el loader o la versión del juego, el lanzador descarga primero. Un log vacío no
+significa «falló»: puede ser «todavía no ha empezado». Comprueba si hay proceso vivo antes de
+concluir nada.
+
+### No te inventes un límite de intentos
+
+Esto es iterar hasta que funcione o hasta topar con un fallo irresoluble. No hay un número de
+intentos tras el cual «toca rendirse». Si de verdad hay un bloqueo sin salida, **se informa y se
+espera** antes de revertir: revertir por decisión propia tira trabajo que costó horas, y con un
+punto de restauración delante lo correcto casi siempre es seguir hacia delante.
+
+---
+
+## Actualizar: por familias, nunca a mods sueltos
+
+El error que más caro sale al actualizar un pack: **actualizar los mods que dependen de una
+librería sin actualizar la librería**. Los dependientes nuevos exigen versiones nuevas de sus
+dependencias, así que apartar «el núcleo» por prudencia y tocar todo lo demás produce justo la
+cascada que se quería evitar:
+
+```
+Mod simplyswords requires architectury 13.0.11 or above
+Mod universalenchants requires puzzleslib 21.1.48 or above
+Mod hybrid_aquatic requires geckolib 4.8.3 or above
+```
+
+Se actualiza **por familias completas**: sodium con sus addons, Create con los suyos, la librería
+con todo lo que la usa. Dentro de una familia, o van todos o no va ninguno.
+
+Y antes de instalar nada, **calcula si el conjunto se sostiene**: lee del jar candidato sus
+`dependencies` declaradas y descarta las actualizaciones cuyas dependencias no se cumplan con lo
+que habrá después. Es un punto fijo de tres líneas y evita la cascada entera.
+
+### Un addon abandonado bloquea a su familia
+
+Si la última versión de un addon es de la era de la librería vieja, no hay actualización posible:
+o se queda toda la familia atrás, o se retira el addon. Comprueba **qué versiones existen** antes
+de dar por hecho que hay salida:
+
+```bash
+curl -s "https://api.modrinth.com/v2/project/<id>/version?loaders=\["neoforge"\]&game_versions=\["1.21.1"\]"
+```
+
+No hace falta que todo se actualice. Lo que hace falta es que el conjunto sea coherente.
+
+### El nombre del archivo miente sobre la versión del juego
+
+Un `Structory_Towers_26.2_v1.0.17.jar` puede colarse en un pack de 1.21.1 y aparecer como
+`File ... is not a valid mod file`. Filtrar por «parece una versión de Minecraft» no basta: 26.2
+no se parece a 1.21.1. Ante un jar que el loader rechaza, mira su `neoforge.mods.toml` antes de
+buscar culpables más lejos.
+
+### Comprueba antes de descartar una versión nueva
+
+Pasó con Ice and Fire: el jar nuevo no traía el shader que el viejo sí tenía, y la conclusión
+fácil era «actualizar empeora». Mirando el bytecode, el mod nuevo **ya no lo pedía** —lo habían
+refactorizado— y actualizar era exactamente el arreglo:
+
+```bash
+unzip -qo nuevo.jar -d /tmp/x && find /tmp/x -name '*.class' -exec strings {} + | grep -c 'recurso_que_falta'
+```
+
+### Cambiar el loader o LWJGL es una palanca legítima
+
+No todo se arregla moviendo jars. Si cuatro mods piden `neoforge 21.1.230` y hay `21.1.216`, subir
+el loader **dentro de la misma línea** resuelve los cuatro de una vez. Y si un mod exige una
+versión concreta de LWJGL, el componente de la instancia se cambia igual de fácil. Los dos son
+reversibles y van en git con el resto de la metadata del pack.
+
+---
+
 ## Proceso por mod problemático — las 3 vías, EN ESTE ORDEN
 
 ```
+0. ¿ES SÍNTOMA?   Un crash puede venir de un fallo anterior de otro mod, y algunos lo dicen:
+                  «Sodium's config could not be found; ... most likely caused by an earlier error
+                  from another mod». Busca en el log lo que pasó ANTES del crash antes de acusar
+                  al que aparece en la pila.
 1. DIAGNOSTICAR   repro real > hipótesis archivada. Los registros viejos del vault
                   pueden estar mal (carpet: "NaturalSpawnerMixin" era falso; cbc_at
                   cargaba la culpa de un crash que era de AdvancementPlaques). Capturar
