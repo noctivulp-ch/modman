@@ -292,6 +292,38 @@ Cuando el objetivo es activar MUCHOS mods desactivados, no ir uno por uno a cieg
 4. Un boot limpio por ola (+ los de bisección). El culpable de cada ola pasa por las 3
    vías de abajo; los inocentes se reintegran y se re-confirma verde con TODOS juntos.
 
+> ### No pases a la ola siguiente con errores de carga sin resolver
+>
+> **«Arranca» no es el criterio. El criterio es que el log esté limpio de errores de carga de
+> mods.** Un mod puede cargar a medias —falla su registro, su config, uno de sus mixins— y el
+> juego llega al menú igual: el fallo no se ve hasta que usas esa parte del mod, y para entonces
+> llevas cinco olas encima y no sabes cuál lo introdujo.
+>
+> Tras **cada** ola, antes de tocar nada más:
+>
+> ```bash
+> grep -icE 'ERROR|FATAL' logs/latest.log                      # ¿cuántos?
+> grep -iE 'ERROR|FATAL' logs/latest.log \
+>   | grep -iE 'exception|caused by|failed to (load|start|init)|could not|mixin.*(fail|error)' \
+>   | grep -viE '<los cosméticos ya conocidos>' | head -30      # ¿cuáles?
+> ```
+>
+> Compara el recuento con el de la ola anterior. **Si sube, la ola lo hizo**, y se resuelve ahora:
+> mientras solo hay un cambio en juego, atribuirlo es gratis. Después cuesta una bisección.
+>
+> Clasifica cada error antes de seguir, porque no todos merecen lo mismo:
+>
+> | Tipo | Qué hacer |
+> |---|---|
+> | Excepción al construir o registrar un mod | **Parar la ola.** Ese mod carga a medias y va a fallar en juego |
+> | Mixin que no aplica (`failed injection check`) | **Parar.** O el mod queda tocado, o hay un conflicto con otro |
+> | Dependencia ausente, versión incompatible | **Parar.** Resolver la dependencia antes de añadir nada más |
+> | Modelo, textura o receta que no carga | Anotar y seguir. Es cosmético o de datapack, no rompe |
+> | Config que no parsea y se regenera | Anotar; revisar que el valor por defecto sirva |
+>
+> Lleva la cuenta escrita (`ola 1: 592 → 73`). Un recuento que baja es la señal de que vas bien; uno
+> que sube sin que sepas por qué es deuda que vas a pagar con intereses.
+
 ---
 
 ## Reparar un pack que funcionaba y se rompió tras una actualización
