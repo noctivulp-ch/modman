@@ -1,0 +1,19 @@
+modman
+Copyright (C) 2026 NoctiVulp
+
+This program is free software: you can redistribute it and/or modify it under the terms of the
+GNU General Public License as published by the Free Software Foundation,
+either version 3 of the License, or (at your option) any later version.
+SPDX-License-Identifier: GPL-3.0-or-later
+
+This program is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY;
+without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
+
+El nombre «NoctiVulp», el de este programa y sus logotipos no se licencian: ver TRADEMARKS.md.
+
+Componentes de terceros
+-----------------------
+
+- Textual, Rich (extra opcional [tui]) — MIT; se instalan aparte, no se incluyen
+- Herramientas de desarrollo y de tools/: pytest (MIT), pytest-asyncio (Apache-2.0), hatchling (MIT), Pillow (MIT-CMU), NumPy (BSD-3-Clause); Chromium como programa externo — no se distribuyen
+- Minecraft, los mods y los paquetes que se gestionan no se incluyen: los aporta el usuario y conservan la licencia de sus autores. Los datos de Modrinth y CurseForge se consultan por sus API públicas
