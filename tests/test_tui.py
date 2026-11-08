@@ -89,6 +89,19 @@ async def test_desplegar_pide_confirmacion_antes_de_tocar_nada(pack):
         assert not list(destino.iterdir()), "cancelar no debe aplicar nada"
 
 
+async def test_la_confirmacion_dice_a_que_destino_va_cada_cambio(pack):
+    """`[servidor]` es también sintaxis de markup de Rich: si se interpreta, desaparece en silencio
+    y el plan que se confirma no dice dónde va a escribir, que es justo lo que hay que revisar."""
+    from textual.widgets import Static
+
+    app = ModmanApp(pack)
+    async with app.run_test() as pilot:
+        await pilot.press("d")
+        await pilot.pause()
+        textos = [str(s.render()) for s in app.screen.query(Static)]
+        assert any("[servidor] alfa.jar" in t for t in textos), textos
+
+
 async def test_con_el_indice_vacio_no_revienta(tmp_path):
     (tmp_path / "modman.toml").write_text(
         '[[targets]]\nname = "srv"\npath = "d"\naccepts = ["server"]\n', encoding="utf-8"

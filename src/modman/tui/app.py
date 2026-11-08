@@ -52,9 +52,9 @@ class ConfirmPlan(ModalScreen[bool]):
             with VerticalScroll(id="dialog-body"):
                 for s in self.plan.changes[:200]:
                     simbolo = {Action.COPY: "+", Action.REMOVE: "-"}.get(s.action, "~")
-                    yield Static(f"{simbolo} [{s.target}] {s.path.name}  ({s.reason})")
+                    yield Static(f"{simbolo} [{s.target}] {s.path.name}  ({s.reason})", markup=False)
                 for c in self.plan.conflicts:
-                    yield Static(f"! {c}", classes="warn")
+                    yield Static(f"! {c}", classes="warn", markup=False)
             yield Label("enter/y aplicar · esc/n cancelar", id="dialog-help")
 
 
