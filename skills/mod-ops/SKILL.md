@@ -209,10 +209,14 @@ permita volver atrás sirve más que nada:
 Instalar la herramienta, una vez por máquina:
 
 ```bash
-uv tool install --force --with textual \
+uv tool install --force --editable --with textual \
     /ruta/a/modman
 modman help          # qué comandos hay, y cuáles escriben
 ```
+
+**`--editable` importa.** Sin él se instala una *copia* del código, y entonces hay dos modman —el
+instalado y el fuente— que se desincronizan en silencio: la versión del `pyproject` no sube en cada
+arreglo, así que nada avisa. Se descubre cuando un comando no hace lo que dice la documentación.
 
 
 El flujo de reparación es el mismo; lo que cambia es **cómo iteras**, y eso depende de qué tipo de
